@@ -226,3 +226,21 @@ img,svg{max-width:100%;display:block}
   .inspectorBackdrop{inset:58px 0 0}
   .metaRow{grid-template-columns:1fr;gap:4px}
 }
+
+.disabledLink{pointer-events:none;opacity:.45}
+
+@media(max-width:380px){
+  .headerInner{padding-left:10px;padding-right:10px}
+  .brand{gap:7px}
+  .brand span:last-child{font-size:13px}
+  .brandMark{width:22px;height:22px}
+  .cartLink{font-size:0}
+  .cartLink span{font-size:13px}
+  .cartLink span:after{content:" selected";font-size:12px}
+  .hero h1{font-size:39px}
+  .sourceGrid{grid-template-columns:1fr}
+  .sourceCell:nth-child(n){border-right:0}
+  .resolverControls{gap:8px}
+  .workspaceControls .input{width:100%!important}
+  .workspaceControls .button{width:100%}
+}
