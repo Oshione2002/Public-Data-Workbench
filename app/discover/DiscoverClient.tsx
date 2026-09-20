@@ -13,6 +13,8 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
   const [inspected,setInspected]=useState<SeriesCatalogItem|null>(null);
   const cart=useCart();
 
+  useEffect(()=>{ if(location.hash==="#cart") setCartOpen(true); },[]);
+
   useEffect(()=>{
     const controller=new AbortController();
     setLoading(true);
