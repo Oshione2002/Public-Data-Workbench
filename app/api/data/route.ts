@@ -34,49 +34,93 @@ async function worldBank(indicator:string,country:string,start:number,end:number
   return {points,sourceUrl:url.toString(),meta:rows[0]?{country:rows[0].country?.value,indicator:rows[0].indicator?.value}:{}};
 }
 
+function parseCsv(text:string){
+  const rows:string[][]=[];
+  let row:string[]=[];
+  let field="";
+  let quoted=false;
+
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(quoted){
+      if(ch==='"' && text[i+1]==='"'){ field+='"'; i++; }
+      else if(ch==='"'){ quoted=false; }
+      else field+=ch;
+    }else{
+      if(ch==='"') quoted=true;
+      else if(ch===","){ row.push(field); field=""; }
+      else if(ch==="\n"){ row.push(field.replace(/\r$/,"")); rows.push(row); row=[]; field=""; }
+      else field+=ch;
+    }
+  }
+  if(field.length||row.length){ row.push(field.replace(/\r$/,"")); rows.push(row); }
+  return rows;
+}
+
 async function imf(indicator:string,country:string,start:number,end:number){
-  const periods=years(start,end).join(",");
-  const commonHeaders:Record<string,string>={
-    "Accept":"application/json",
-    "Accept-Encoding":"*",
-    "Accept-Language":"en-US,en;q=0.9",
-    "User-Agent":"Mozilla/5.0 (compatible; PublicDataWorkbench/1.0; +https://github.com/Oshione2002/Public-Data-Workbench)",
-    "Referer":"https://www.imf.org/external/datamapper/"
-  };
+  // IMF migrated WEO to its official SDMX API. DataMapper is intentionally
+  // not used here because its edge protection can return 403s or hang on
+  // server-side requests.
+  const key=`${country.toUpperCase()}.${indicator}.A`;
+  const url=new URL(
+    `https://api.imf.org/external/sdmx/3.0/data/dataflow/IMF.RES/WEO/+/${encodeURIComponent(key)}`
+  );
+  url.searchParams.set("startPeriod",String(start));
+  url.searchParams.set("endPeriod",String(end));
 
-  const attempts=[
-    new URL(`https://www.imf.org/external/datamapper/api/v2/${encodeURIComponent(indicator)}/${encodeURIComponent(country)}`),
-    new URL(`https://www.imf.org/external/datamapper/api/v1/${encodeURIComponent(indicator)}/${encodeURIComponent(country)}`)
-  ];
-  for(const u of attempts) u.searchParams.set("periods",periods);
+  let lastError="";
+  for(let attempt=0;attempt<2;attempt++){
+    try{
+      const response=await fetch(url,{
+        headers:{
+          "Accept":"text/csv",
+          "User-Agent":"PublicDataWorkbench/1.0 (+https://github.com/Oshione2002/Public-Data-Workbench)"
+        },
+        next:{revalidate:900},
+        signal:AbortSignal.timeout(18000)
+      });
 
-  let lastStatus=0;
-  let lastBody="";
-  for(const url of attempts){
-    const response=await fetch(url,{
-      headers:commonHeaders,
-      cache:"no-store",
-      signal:AbortSignal.timeout(25000)
-    });
-    lastStatus=response.status;
+      if(response.ok){
+        const csv=await response.text();
+        const rows=parseCsv(csv).filter(r=>r.some(cell=>cell.trim()!==""));
+        if(rows.length<2) return {points:[] as Point[],sourceUrl:url.toString(),meta:{dataset:"IMF.RES:WEO",transport:"SDMX 3.0"}};
 
-    if(response.ok){
-      const payload:any=await response.json();
-      const root=payload?.values?.[indicator]??payload?.values??{};
-      const series=root?.[country]??root?.[country.toUpperCase()]??root;
-      const points:Point[]=Object.entries(series||{}).flatMap(([year,value])=>{
-        const y=Number(year);
-        const v=numeric(value);
-        return Number.isFinite(y)&&y>=start&&y<=end&&v!==null?[{year:y,value:v}]:[];
-      }).sort((a:Point,b:Point)=>a.year-b.year);
-      return {points,sourceUrl:url.toString(),meta:payload?.api??{}};
+        const header=rows[0].map(x=>x.replace(/^\uFEFF/,"").trim());
+        const timeIndex=header.findIndex(x=>x==="TIME_PERIOD"||x==="TIME_PERIOD_START");
+        const valueIndex=header.findIndex(x=>x==="OBS_VALUE");
+        if(timeIndex<0||valueIndex<0){
+          throw new Error("IMF SDMX CSV response did not contain TIME_PERIOD and OBS_VALUE columns.");
+        }
+
+        const points:Point[]=rows.slice(1).flatMap(cols=>{
+          const year=Number(String(cols[timeIndex]||"").slice(0,4));
+          const value=numeric(cols[valueIndex]);
+          return Number.isFinite(year)&&year>=start&&year<=end&&value!==null?[{year,value}]:[];
+        }).sort((a,b)=>a.year-b.year);
+
+        return {
+          points,
+          sourceUrl:url.toString(),
+          meta:{
+            dataset:"IMF.RES:WEO",
+            transport:"SDMX 3.0",
+            country:country.toUpperCase(),
+            indicator
+          }
+        };
+      }
+
+      const body=(await response.text()).replace(/\s+/g," ").slice(0,240);
+      lastError=`HTTP ${response.status}${body?" — "+body:""}`;
+      if(response.status!==429 && response.status<500) break;
+    }catch(error){
+      lastError=error instanceof Error?error.message:"Unknown IMF request error";
     }
 
-    lastBody=(await response.text()).slice(0,300);
-    if(response.status!==403 && response.status!==404) break;
+    if(attempt===0) await new Promise(resolve=>setTimeout(resolve,500));
   }
 
-  throw new Error(`IMF DataMapper returned HTTP ${lastStatus}. The IMF edge network rejected the server request after both v2 and v1 attempts.${lastBody?" Response: "+lastBody.replace(/\s+/g," ").slice(0,180):""}`);
+  throw new Error(`IMF SDMX request failed: ${lastError||"unknown error"}`);
 }
 
 async function fred(indicator:string,start:number,end:number){
