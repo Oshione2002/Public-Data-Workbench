@@ -1,40 +1,87 @@
 # Public Data Workbench
 
-A research-data discovery and preparation interface for finding, comparing, reconciling and exporting public statistical series from major international data providers.
+Public Data Workbench is a responsive research-data application for finding, comparing, retrieving, reconciling, transforming and exporting public statistical series while keeping provenance visible.
 
-## Current build
+## Stack
 
-This repository contains the working front-end product flow:
+- Next.js App Router
+- React + TypeScript
+- No UI component framework
+- Server-side provider proxy with an allow-listed registry
+- Responsive layouts for desktop, tablet and mobile
 
-- **Discover** — search results, source/frequency filters, details inspector and a reversible Data Cart.
-- **Sources** — directory of major public-data providers and their official API/documentation pages.
-- **Resolver** — compare incomplete or overlapping series before constructing a composite.
-- **Workspace** — inspect data, metadata and transformations while preserving provenance.
+## Product areas
 
-Selections in the Data Cart are stored locally in the browser and can be added or removed from both search results and the cart.
+- **Discover** — search the local series catalogue, inspect definitions and add/remove series from a persistent Data Cart.
+- **Sources** — provider registry plus a controlled API console for verified upstream API bases.
+- **Resolver** — compare coverage and overlapping observations before combining incomplete series.
+- **Workspace** — retrieve selected live series, merge by year, chart, transform and export.
+- **Exports** — CSV data and JSON metadata with source codes, retrieval dates and source URLs where available.
+
+## Provider registry
+
+The application registers World Bank, IMF, ILO, OECD, Eurostat, UNICEF, UNESCO UIS, UNDP, FAO, WTO, UN Comtrade, UN SDG, UNHCR, UN Population Division, ADB, AfDB, BIS, ECB, FRED, EIA and UNCTAD.
+
+The registry deliberately distinguishes:
+
+1. **Live public APIs** with verified public base endpoints.
+2. **Keyed APIs** that require credentials configured on the server.
+3. **Portal/bulk integrations** where the application does not claim a live endpoint unless a verified public base URL is available.
+
+### Normalized series adapters
+
+The current common time-series response format is implemented for:
+
+- World Bank Indicators API
+- IMF DataMapper API
+- FRED when a server-side key is configured
+
+Other verified providers remain accessible through the provider API console while provider-specific normalization is added.
+
+## Environment variables
+
+Copy `.env.example` to `.env.local` when running locally.
+
+```text
+FRED_API_KEY=
+EIA_API_KEY=
+WTO_API_KEY=
+COMTRADE_API_KEY=
+UN_POPULATION_TOKEN=
+```
+
+Never place keys in client-side code.
 
 ## Run locally
 
-No build step is required. Open `index.html` directly, or serve the folder with any static web server.
-
-Example:
-
 ```bash
-python -m http.server 8000
+npm install
+npm run dev
 ```
 
-Then open `http://localhost:8000`.
+Open http://localhost:3000.
 
-## Architecture direction
+## Production build
 
-The production backend is intended to use reusable connector families rather than a separate implementation for every provider:
+```bash
+npm run build
+npm start
+```
 
-- SDMX connectors: IMF, ILO, OECD, Eurostat, BIS, ECB and others.
-- REST/OData connectors: World Bank, WTO, UN Comtrade, UNDP, FRED, EIA and others.
-- Bulk-file connectors: providers where CSV/ZIP distribution is the supported integration route.
+## API routes
 
-The resolver must never silently combine series. Compatibility, coverage, methodology and provenance remain visible to the researcher.
+- `GET /api/catalog?q=inflation`
+- `GET /api/providers`
+- `GET /api/data?provider=world-bank&indicator=FP.CPI.TOTL.ZG&country=NGA&start=1990&end=2025`
+- `GET /api/data?provider=imf&indicator=PCPIPCH&country=NGA&start=1990&end=2025`
+- `GET /api/provider/{provider}?path={relative-upstream-path}`
 
-## Important
+The provider proxy rejects arbitrary hosts and path traversal, caps large responses, applies keys only on the server, and uses only hosts configured in `lib/providers.ts`.
 
-The values displayed in the current workspace are illustrative interface data, not live API responses. Provider API integrations should be added server-side where credentials or cross-origin restrictions apply.
+## Data integrity
+
+The resolver never silently combines series. A researcher must select the construction. Numeric overlap is shown as evidence, not treated as proof that two methodologies are identical.
+
+## Deployment
+
+The project is suitable for Vercel because the provider adapters use server-side route handlers. Static-only hosts such as GitHub Pages cannot run the API layer.
