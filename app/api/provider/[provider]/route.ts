@@ -28,6 +28,13 @@ export async function GET(request:NextRequest,{params}:{params:Promise<{provider
   });
 
   const headers=new Headers({Accept:request.headers.get("accept")||"application/json, text/csv;q=0.9, */*;q=0.8"});
+  if(provider.id==="imf"){
+    headers.set("Accept","application/json");
+    headers.set("Accept-Encoding","*");
+    headers.set("Accept-Language","en-US,en;q=0.9");
+    headers.set("User-Agent","Mozilla/5.0 (compatible; PublicDataWorkbench/1.0; +https://github.com/Oshione2002/Public-Data-Workbench)");
+    headers.set("Referer","https://www.imf.org/external/datamapper/");
+  }
   if(provider.mode==="keyed"){
     const key=provider.keyEnv?process.env[provider.keyEnv]:"";
     if(!key) return NextResponse.json({error:`${provider.shortName} requires a server-side API key.`,docs:provider.docs},{status:503});
