@@ -35,19 +35,48 @@ async function worldBank(indicator:string,country:string,start:number,end:number
 }
 
 async function imf(indicator:string,country:string,start:number,end:number){
-  const url=new URL(`https://www.imf.org/external/datamapper/api/v2/${encodeURIComponent(indicator)}/${encodeURIComponent(country)}`);
-  url.searchParams.set("periods",years(start,end).join(","));
-  const response=await fetch(url,{next:{revalidate:900},signal:AbortSignal.timeout(25000)});
-  if(!response.ok) throw new Error(`IMF DataMapper returned HTTP ${response.status}`);
-  const payload:any=await response.json();
-  const root=payload?.values?.[indicator]??payload?.values??{};
-  const series=root?.[country]??root?.[country.toUpperCase()]??root;
-  const points:Point[]=Object.entries(series||{}).flatMap(([year,value])=>{
-    const y=Number(year);
-    const v=numeric(value);
-    return Number.isFinite(y)&&y>=start&&y<=end&&v!==null?[{year:y,value:v}]:[];
-  }).sort((a:Point,b:Point)=>a.year-b.year);
-  return {points,sourceUrl:url.toString(),meta:payload?.api??{}};
+  const periods=years(start,end).join(",");
+  const commonHeaders:Record<string,string>={
+    "Accept":"application/json",
+    "Accept-Encoding":"*",
+    "Accept-Language":"en-US,en;q=0.9",
+    "User-Agent":"Mozilla/5.0 (compatible; PublicDataWorkbench/1.0; +https://github.com/Oshione2002/Public-Data-Workbench)",
+    "Referer":"https://www.imf.org/external/datamapper/"
+  };
+
+  const attempts=[
+    new URL(`https://www.imf.org/external/datamapper/api/v2/${encodeURIComponent(indicator)}/${encodeURIComponent(country)}`),
+    new URL(`https://www.imf.org/external/datamapper/api/v1/${encodeURIComponent(indicator)}/${encodeURIComponent(country)}`)
+  ];
+  for(const u of attempts) u.searchParams.set("periods",periods);
+
+  let lastStatus=0;
+  let lastBody="";
+  for(const url of attempts){
+    const response=await fetch(url,{
+      headers:commonHeaders,
+      cache:"no-store",
+      signal:AbortSignal.timeout(25000)
+    });
+    lastStatus=response.status;
+
+    if(response.ok){
+      const payload:any=await response.json();
+      const root=payload?.values?.[indicator]??payload?.values??{};
+      const series=root?.[country]??root?.[country.toUpperCase()]??root;
+      const points:Point[]=Object.entries(series||{}).flatMap(([year,value])=>{
+        const y=Number(year);
+        const v=numeric(value);
+        return Number.isFinite(y)&&y>=start&&y<=end&&v!==null?[{year:y,value:v}]:[];
+      }).sort((a:Point,b:Point)=>a.year-b.year);
+      return {points,sourceUrl:url.toString(),meta:payload?.api??{}};
+    }
+
+    lastBody=(await response.text()).slice(0,300);
+    if(response.status!==403 && response.status!==404) break;
+  }
+
+  throw new Error(`IMF DataMapper returned HTTP ${lastStatus}. The IMF edge network rejected the server request after both v2 and v1 attempts.${lastBody?" Response: "+lastBody.replace(/\s+/g," ").slice(0,180):""}`);
 }
 
 async function fred(indicator:string,start:number,end:number){
