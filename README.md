@@ -84,4 +84,21 @@ The resolver never silently combines series. A researcher must select the constr
 
 ## Deployment
 
-The project is suitable for Vercel because the provider adapters use server-side route handlers. Static-only hosts such as GitHub Pages cannot run the API layer.
+### Vercel
+
+This repository is ready to import as a Next.js project in Vercel.
+
+1. In Vercel, choose **Add New → Project**.
+2. Import **Oshione2002/Public-Data-Workbench** from GitHub.
+3. Keep the detected framework as **Next.js** and the root directory as the repository root.
+4. Add any API credentials you want to enable under **Project Settings → Environment Variables**:
+   - `FRED_API_KEY`
+   - `EIA_API_KEY`
+   - `WTO_API_KEY`
+   - `COMTRADE_API_KEY`
+   - `UN_POPULATION_TOKEN`
+5. Deploy.
+
+Public adapters such as World Bank and IMF work without secret keys. Keyed providers remain unavailable until their server-side environment variables are configured.
+
+The application requires server-side route handlers, so GitHub Pages is not a suitable production host.
