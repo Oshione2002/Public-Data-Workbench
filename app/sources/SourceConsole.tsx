@@ -5,7 +5,7 @@ type Provider = {id:string;shortName:string;mode:string;queryable:boolean;config
 
 const examples:Record<string,string>={
   "world-bank":"indicator/NY.GDP.MKTP.CD?format=json",
-  "imf":"indicators",
+  "imf":"data/dataflow/IMF.RES/WEO/+/NGA.NGDP_RPCH.A?startPeriod=2020&endPeriod=2026",
   "ilo":"dataflow/all/all/latest",
   "oecd":"dataflow/all/all/latest",
   "eurostat":"statistics/1.0/data/DEMO_R_D3DENS?lang=EN",
