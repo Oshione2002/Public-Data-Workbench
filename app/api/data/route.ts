@@ -26,9 +26,11 @@ async function worldBank(indicator:string,country:string,start:number,end:number
   if(!response.ok) throw new Error(`World Bank returned HTTP ${response.status}`);
   const payload=await response.json();
   const rows=Array.isArray(payload)&&Array.isArray(payload[1])?payload[1]:[];
-  const points:Point[]=rows.map((row:any)=>({year:Number(row.date),value:numeric(row.value)}))
-    .filter((x:any)=>Number.isFinite(x.year)&&x.value!==null)
-    .sort((a:any,b:any)=>a.year-b.year);
+  const points:Point[]=rows.flatMap((row:any)=>{
+    const year=Number(row.date);
+    const value=numeric(row.value);
+    return Number.isFinite(year)&&value!==null?[{year,value}]:[];
+  }).sort((a:Point,b:Point)=>a.year-b.year);
   return {points,sourceUrl:url.toString(),meta:rows[0]?{country:rows[0].country?.value,indicator:rows[0].indicator?.value}:{}};
 }
 
@@ -40,10 +42,11 @@ async function imf(indicator:string,country:string,start:number,end:number){
   const payload:any=await response.json();
   const root=payload?.values?.[indicator]??payload?.values??{};
   const series=root?.[country]??root?.[country.toUpperCase()]??root;
-  const points:Point[]=Object.entries(series||{})
-    .map(([year,value])=>({year:Number(year),value:numeric(value)}))
-    .filter((x:any)=>Number.isFinite(x.year)&&x.year>=start&&x.year<=end&&x.value!==null)
-    .sort((a:any,b:any)=>a.year-b.year);
+  const points:Point[]=Object.entries(series||{}).flatMap(([year,value])=>{
+    const y=Number(year);
+    const v=numeric(value);
+    return Number.isFinite(y)&&y>=start&&y<=end&&v!==null?[{year:y,value:v}]:[];
+  }).sort((a:Point,b:Point)=>a.year-b.year);
   return {points,sourceUrl:url.toString(),meta:payload?.api??{}};
 }
 
@@ -60,8 +63,11 @@ async function fred(indicator:string,start:number,end:number){
   const response=await fetch(url,{cache:"no-store",signal:AbortSignal.timeout(25000)});
   if(!response.ok) throw new Error(`FRED returned HTTP ${response.status}`);
   const payload:any=await response.json();
-  const points:Point[]=(payload.observations||[]).map((row:any)=>({year:Number(String(row.date).slice(0,4)),value:numeric(row.value)}))
-    .filter((x:any)=>Number.isFinite(x.year)&&x.value!==null);
+  const points:Point[]=(payload.observations||[]).flatMap((row:any)=>{
+    const year=Number(String(row.date).slice(0,4));
+    const value=numeric(row.value);
+    return Number.isFinite(year)&&value!==null?[{year,value}]:[];
+  });
   return {points,sourceUrl:"https://fred.stlouisfed.org/series/"+encodeURIComponent(indicator),meta:{}};
 }
 
