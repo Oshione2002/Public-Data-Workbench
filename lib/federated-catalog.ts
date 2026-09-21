@@ -7,6 +7,7 @@ export type ProviderSearchStatus={
   count:number;
   capped?:boolean;
   message?:string;
+  partial?:boolean;
   frequencyCounts?:Partial<Record<ProviderFrequency,number>>;
   frequencyCapped?:Partial<Record<ProviderFrequency,boolean>>;
 };
@@ -143,6 +144,52 @@ function capFrequencyCounts(counts:Partial<Record<ProviderFrequency,number>>){
   }
 
   return {frequencyCounts:normalized,frequencyCapped:capped};
+}
+
+async function worldBank(q:string):Promise<SearchOutcome>{
+  const url=new URL("https://api.worldbank.org/v2/indicator");
+  url.searchParams.set("format","json");
+  url.searchParams.set("source","2");
+  url.searchParams.set("per_page","20000");
+
+  const res=await fetch(url,{
+    next:{revalidate:86400},
+    signal:AbortSignal.timeout(18000)
+  });
+  if(!res.ok) throw new Error("HTTP "+res.status);
+
+  const payload:any=await res.json();
+  const rows=Array.isArray(payload)&&Array.isArray(payload[1])?payload[1]:[];
+
+  const matched=rows.filter((row:any)=>{
+    const code=text(row?.id);
+    const name=text(row?.name);
+    const note=text(row?.sourceNote);
+    const topics=Array.isArray(row?.topics)?row.topics.map((topic:any)=>text(topic?.value)).join(" "):"";
+    return code&&name&&matchesQuery(q,code,name,note,topics);
+  });
+
+  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>({
+    id:"wb-"+text(row.id),
+    concept:"world-bank-indicator",
+    title:text(row.name)||text(row.id),
+    provider:"World Bank",
+    providerId:"world-bank",
+    indicator:text(row.id),
+    unit:text(row.unit)||unitFromDescription(text(row.name)),
+    frequency:"Annual",
+    description:text(row.sourceNote)||text(row.name),
+    normalized:true,
+    resultType:"series",
+    selectable:true,
+    sourceUrl:"https://data.worldbank.org/indicator/"+encodeURIComponent(text(row.id))
+  } satisfies SeriesCatalogItem));
+
+  return {
+    items,
+    total:matched.length,
+    ...capFrequencyCounts({annual:matched.length})
+  };
 }
 
 async function fred(q:string):Promise<SearchOutcome>{
@@ -497,7 +544,13 @@ async function eia(q:string):Promise<SearchOutcome>{
 type SearchFn=(q:string)=>Promise<SearchOutcome>;
 
 const dynamicSearchers:Record<string,SearchFn>={
-  fred,sdg,"un-population":unPopulation,wto,unhcr,eia
+  "world-bank":worldBank,
+  fred,
+  sdg,
+  "un-population":unPopulation,
+  wto,
+  unhcr,
+  eia
 };
 
 for(const config of sdmxProviders){
@@ -510,7 +563,9 @@ export async function federatedCatalogSearch(q:string,providerIds:string[]):Prom
   const results:SeriesCatalogItem[]=[];
   const status:ProviderSearchStatus[]=[];
 
-  const local=searchCatalog(q).filter(item=>includeAll||requested.has(item.providerId));
+  const local=searchCatalog(q).filter(item=>
+    (includeAll||requested.has(item.providerId))&&!dynamicSearchers[item.providerId]
+  );
   results.push(...local);
 
   const localCounts=new Map<string,number>();
@@ -521,11 +576,12 @@ export async function federatedCatalogSearch(q:string,providerIds:string[]):Prom
       providerId,
       state:"ok",
       ...statusCount(total),
+      partial:true,
       ...capFrequencyCounts(countsFromItems(providerItems))
     });
   }
 
-  const defaultDynamic=["fred","sdg","unhcr","wto","un-population","eia"];
+  const defaultDynamic=["world-bank","fred","sdg","unhcr","wto","un-population","eia"];
   const ids=includeAll
     ? (q.trim()?Object.keys(dynamicSearchers):defaultDynamic)
     : [...requested].filter(id=>dynamicSearchers[id]);
@@ -574,6 +630,7 @@ export async function providerCatalogueCounts():Promise<ProviderSearchStatus[]>{
 
   const local=searchCatalog("");
   for(const provider of providers){
+    if(dynamicSearchers[provider.id]) continue;
     const total=local.filter(item=>item.providerId===provider.id).length;
     if(total){
       const providerItems=local.filter(item=>item.providerId===provider.id);
@@ -581,6 +638,7 @@ export async function providerCatalogueCounts():Promise<ProviderSearchStatus[]>{
         providerId:provider.id,
         state:"ok",
         ...statusCount(total),
+        partial:true,
         ...capFrequencyCounts(countsFromItems(providerItems))
       });
     }
