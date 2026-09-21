@@ -103,7 +103,7 @@ export default function WorkspaceClient(){
           year:Number(point.year),
           period:String(point.period??point.year),
           value:Number(point.value)
-        })).filter(point=>Number.isFinite(point.year)&&Number.isFinite(point.value)&&point.period);
+        })).filter((point:Point)=>Number.isFinite(point.year)&&Number.isFinite(point.value)&&Boolean(point.period));
 
         return {
           item,
