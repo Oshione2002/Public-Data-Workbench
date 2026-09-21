@@ -90,6 +90,35 @@ function dedupe(items:SeriesCatalogItem[]){
     });
 }
 
+
+function parseCsvTable(input:string){
+  const rows:string[][]=[];
+  let row:string[]=[];
+  let field="";
+  let quoted=false;
+
+  for(let i=0;i<input.length;i++){
+    const ch=input[i];
+    if(quoted){
+      if(ch==='"'&&input[i+1]==='"'){ field+='"'; i++; }
+      else if(ch==='"') quoted=false;
+      else field+=ch;
+    }else{
+      if(ch==='"') quoted=true;
+      else if(ch===','){ row.push(field); field=""; }
+      else if(ch==='\n'){ row.push(field.replace(/\r$/,"")); rows.push(row); row=[]; field=""; }
+      else field+=ch;
+    }
+  }
+  if(field.length||row.length){ row.push(field.replace(/\r$/,"")); rows.push(row); }
+  if(!rows.length) return [] as Record<string,string>[];
+
+  const header=rows[0].map(cell=>cell.replace(/^\uFEFF/,"").trim());
+  return rows.slice(1)
+    .filter(cols=>cols.some(cell=>cell.trim()!==""))
+    .map(cols=>Object.fromEntries(header.map((key,index)=>[key,String(cols[index]??"").trim()])));
+}
+
 function flattenObjects(value:unknown,out:any[]=[],depth=0){
   if(depth>8||out.length>30000||value===null||value===undefined) return out;
   if(Array.isArray(value)){
@@ -201,6 +230,67 @@ async function worldBank(q:string):Promise<SearchOutcome>{
   };
 }
 
+
+
+async function ilo(q:string):Promise<SearchOutcome>{
+  const url="https://webapps.ilo.org/ilostat-files/WEB_bulk_download/indicator/table_of_contents_en.csv";
+  const res=await fetch(url,{
+    headers:{Accept:"text/csv"},
+    next:{revalidate:21600},
+    signal:AbortSignal.timeout(18000)
+  });
+  if(!res.ok) throw new Error("HTTP "+res.status);
+
+  const rows=parseCsvTable(await res.text());
+  const matched=rows.filter(row=>
+    matchesQuery(
+      q,
+      row["indicator"]||"",
+      row["indicator.label"]||"",
+      row["freq.label"]||"",
+      row["collection.label"]||"",
+      row["subject.label"]||""
+    )
+  );
+
+  const items=matched.slice(0,MAX_PER_SOURCE).map(row=>{
+    const code=row["indicator"]||row["id"]||"";
+    const fileId=row["id"]||code;
+    const frequency=row["freq.label"]||(
+      row["freq"]==="A"?"Annual":
+      row["freq"]==="Q"?"Quarterly":
+      row["freq"]==="M"?"Monthly":"Provider-defined"
+    );
+
+    return {
+      id:"ilo-"+fileId,
+      concept:"ilo-indicator",
+      title:row["indicator.label"]||code,
+      provider:"ILO",
+      providerId:"ilo",
+      indicator:fileId,
+      unit:unitFromDescription(row["indicator.label"]||""),
+      frequency,
+      description:[
+        row["collection.label"],
+        row["subject.label"],
+        row["data.start"]&&row["data.end"]?("Coverage "+row["data.start"]+"–"+row["data.end"]):""
+      ].filter(Boolean).join(" · "),
+      normalized:false,
+      resultType:"series",
+      selectable:false,
+      sourceUrl:"https://ilostat.ilo.org/data/"
+    } satisfies SeriesCatalogItem;
+  });
+
+  const freq:Partial<Record<ProviderFrequency,number>>={};
+  for(const row of matched){
+    const value=row["freq.label"]||row["freq"]||"";
+    incrementFrequency(freq,value);
+  }
+
+  return {items,total:matched.length,...capFrequencyCounts(freq)};
+}
 
 async function unesco(q:string):Promise<SearchOutcome>{
   const url="https://api.uis.unesco.org/api/public/definitions/indicators";
@@ -331,7 +421,7 @@ async function fao(q:string):Promise<SearchOutcome>{
 
 async function comtrade(q:string):Promise<SearchOutcome>{
   const key=process.env.COMTRADE_API_KEY;
-  if(!key) return {items:[],total:0,partial:true};
+  if(!key) throw new Error("COMTRADE_API_KEY is not configured");
 
   const url=new URL("https://comtradeapi.un.org/public/v1/getMetadata/C/A/HS");
   url.searchParams.set("subscription-key",key);
@@ -379,7 +469,7 @@ async function comtrade(q:string):Promise<SearchOutcome>{
 
 async function undp(q:string):Promise<SearchOutcome>{
   const key=process.env.UNDP_API_KEY;
-  if(!key) return {items:[],total:0,partial:true};
+  if(!key) throw new Error("UNDP_API_KEY is not configured");
 
   const url=new URL("https://hdrdata.org/api/Metadata/Indicators");
   url.searchParams.set("apikey",key);
@@ -514,7 +604,7 @@ async function unctad(q:string):Promise<SearchOutcome>{
 
 async function fred(q:string):Promise<SearchOutcome>{
   const key=process.env.FRED_API_KEY;
-  if(!key) return {items:[],total:0};
+  if(!key) throw new Error("FRED_API_KEY is not configured");
 
   const url=new URL("https://api.stlouisfed.org/fred/series/search");
   url.searchParams.set("api_key",key);
@@ -604,7 +694,7 @@ async function sdg(q:string):Promise<SearchOutcome>{
 
 async function unPopulation(q:string):Promise<SearchOutcome>{
   const token=process.env.UN_POPULATION_TOKEN;
-  if(!token) return {items:[],total:0};
+  if(!token) throw new Error("UN_POPULATION_TOKEN is not configured");
 
   const url=new URL("https://population.un.org/dataportalapi/api/v1/Indicators");
   url.searchParams.set("pageSize","1000");
@@ -649,7 +739,7 @@ async function unPopulation(q:string):Promise<SearchOutcome>{
 
 async function wto(q:string):Promise<SearchOutcome>{
   const key=process.env.WTO_API_KEY;
-  if(!key) return {items:[],total:0};
+  if(!key) throw new Error("WTO_API_KEY is not configured");
 
   const res=await fetch("https://api.wto.org/timeseries/v1/indicators?lang=1",{
     headers:{Accept:"application/json","Ocp-Apim-Subscription-Key":key},
@@ -826,7 +916,7 @@ async function sdmxDataflows(config:SdmxConfig,q:string):Promise<SearchOutcome>{
 
 async function eia(q:string):Promise<SearchOutcome>{
   const key=process.env.EIA_API_KEY;
-  if(!key) return {items:[],total:0};
+  if(!key) throw new Error("EIA_API_KEY is not configured");
 
   const url=new URL("https://api.eia.gov/v2/");
   url.searchParams.set("api_key",key);
@@ -859,7 +949,7 @@ async function eia(q:string):Promise<SearchOutcome>{
     } satisfies SeriesCatalogItem;
   });
 
-  return {items,total:matched.length};
+  return {items,total:matched.length,partial:true};
 }
 
 type SearchFn=(q:string)=>Promise<SearchOutcome>;
@@ -884,6 +974,7 @@ const dynamicSearchers:Record<string,SearchFn>={
 for(const config of sdmxProviders){
   dynamicSearchers[config.id]=(q:string)=>sdmxDataflows(config,q);
 }
+dynamicSearchers["ilo"]=ilo;
 
 export async function federatedCatalogSearch(q:string,providerIds:string[]):Promise<SearchResponse>{
   const requested=new Set(providerIds.filter(Boolean));
@@ -978,7 +1069,7 @@ export async function providerCatalogueCounts():Promise<ProviderSearchStatus[]>{
     try{
       // FRED has no unfiltered list endpoint. A one-letter search gives a
       // lower bound; once it exceeds the UI cap, 1000+ is sufficient.
-      const query=providerId==="fred"?"a":"";
+      const query=providerId==="fred"?"economic":"";
       const outcome=await search(query);
       return {
         providerId,
