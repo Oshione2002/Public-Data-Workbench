@@ -97,6 +97,7 @@ This repository is ready to import as a Next.js project in Vercel.
    - `WTO_API_KEY`
    - `COMTRADE_API_KEY`
    - `UN_POPULATION_TOKEN`
+   - `UNDP_API_KEY`
 5. Deploy.
 
 Public adapters such as World Bank and IMF work without secret keys. Keyed providers remain unavailable until their server-side environment variables are configured.
