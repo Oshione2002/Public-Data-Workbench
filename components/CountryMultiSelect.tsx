@@ -40,7 +40,7 @@ export default function CountryMultiSelect({
         return data;
       })
       .then(data=>{
-        const list=Array.isArray(data.countries)?data.countries:[];
+        const list:CountryOption[]=Array.isArray(data.countries)?data.countries as CountryOption[]:[];
         setCountries(list);
 
         // Refresh the default placeholder country object with the canonical
