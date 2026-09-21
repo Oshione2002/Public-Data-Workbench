@@ -16,6 +16,8 @@ const examples:Record<string,string>={
   "un-population":"Indicators",
   "bis":"dataflow/all/all/latest",
   "ecb":"data/EXR/D.USD.EUR.SP00.A?startPeriod=2024-01-01",
+  "wto":"indicator_categories?lang=1",
+  "un-comtrade":"data/v1/getLiveUpdate",
   "fred":"series/search?search_text=nigeria&file_type=json",
   "eia":"electricity/retail-sales/data/?frequency=annual&data[0]=price&facets[stateid][]=US&start=2020"
 };
