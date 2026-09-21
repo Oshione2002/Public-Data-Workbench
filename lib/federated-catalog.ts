@@ -143,7 +143,7 @@ async function sdg(q:string):Promise<SeriesCatalogItem[]>{
         providerId:"sdg",
         indicator:code,
         unit:unitFromDescription(title),
-        frequency:"Provider-defined",
+        frequency:"Annual",
         description:title,
         normalized:true,
         resultType:"series",
@@ -225,9 +225,9 @@ async function wto(q:string):Promise<SeriesCatalogItem[]>{
         unit:text(row.unit)||text(row.units)||"See WTO metadata",
         frequency:wtoFrequency(code,text(row.frequency)),
         description:text(row.description)||title,
-        normalized:false,
+        normalized:true,
         resultType:"series",
-        selectable:false,
+        selectable:true,
         sourceUrl:"https://stats.wto.org/"
       } satisfies SeriesCatalogItem;
     });
