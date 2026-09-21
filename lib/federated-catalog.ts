@@ -1,5 +1,5 @@
 import { searchCatalog, type SeriesCatalogItem } from "@/lib/catalog";
-import { getProvider } from "@/lib/providers";
+import { getProvider, providers } from "@/lib/providers";
 
 export type ProviderSearchStatus={
   providerId:string;
@@ -14,7 +14,13 @@ type SearchResponse={
   status:ProviderSearchStatus[];
 };
 
+type SearchOutcome={
+  items:SeriesCatalogItem[];
+  total:number;
+};
+
 const MAX_PER_SOURCE=20;
+const BADGE_CAP=1000;
 
 function text(value:unknown){
   return typeof value==="string"?value.trim():"";
@@ -71,25 +77,30 @@ function dedupe(items:SeriesCatalogItem[]){
 }
 
 function flattenObjects(value:unknown,out:any[]=[],depth=0){
-  if(depth>8||out.length>15000||value===null||value===undefined) return out;
+  if(depth>8||out.length>30000||value===null||value===undefined) return out;
   if(Array.isArray(value)){
     for(const item of value){
       if(item&&typeof item==="object"&&!Array.isArray(item)) out.push(item);
       flattenObjects(item,out,depth+1);
-      if(out.length>15000) break;
+      if(out.length>30000) break;
     }
   }else if(typeof value==="object"){
     for(const child of Object.values(value as Record<string,unknown>)){
       flattenObjects(child,out,depth+1);
-      if(out.length>15000) break;
+      if(out.length>30000) break;
     }
   }
   return out;
 }
 
-async function fred(q:string):Promise<SeriesCatalogItem[]>{
+function statusCount(total:number){
+  return {count:Math.min(total,BADGE_CAP),capped:total>BADGE_CAP};
+}
+
+async function fred(q:string):Promise<SearchOutcome>{
   const key=process.env.FRED_API_KEY;
-  if(!key) return [];
+  if(!key) return {items:[],total:0};
+
   const url=new URL("https://api.stlouisfed.org/fred/series/search");
   url.searchParams.set("api_key",key);
   url.searchParams.set("file_type","json");
@@ -99,8 +110,10 @@ async function fred(q:string):Promise<SeriesCatalogItem[]>{
 
   const res=await fetch(url,{cache:"no-store",signal:AbortSignal.timeout(9000)});
   if(!res.ok) throw new Error("HTTP "+res.status);
+
   const payload:any=await res.json();
-  return (Array.isArray(payload?.seriess)?payload.seriess:[]).slice(0,MAX_PER_SOURCE).map((row:any)=>({
+  const rows=Array.isArray(payload?.seriess)?payload.seriess:[];
+  const items=rows.slice(0,MAX_PER_SOURCE).map((row:any)=>({
     id:"fred-"+text(row.id),
     concept:"fred-series",
     title:text(row.title)||text(row.id),
@@ -114,123 +127,135 @@ async function fred(q:string):Promise<SeriesCatalogItem[]>{
     resultType:"series",
     selectable:true,
     sourceUrl:"https://fred.stlouisfed.org/series/"+encodeURIComponent(text(row.id))
-  }));
+  } satisfies SeriesCatalogItem));
+
+  const total=Number(payload?.count);
+  return {items,total:Number.isFinite(total)?total:rows.length};
 }
 
-async function sdg(q:string):Promise<SeriesCatalogItem[]>{
+async function sdg(q:string):Promise<SearchOutcome>{
   const res=await fetch("https://unstats.un.org/SDGAPI/v1/sdg/Series/List",{
     next:{revalidate:21600},
     signal:AbortSignal.timeout(9000)
   });
   if(!res.ok) throw new Error("HTTP "+res.status);
+
   const payload:any=await res.json();
   const rows=Array.isArray(payload)?payload:flattenObjects(payload);
-  return rows
-    .filter((row:any)=>{
-      const code=objectCode(row);
-      const name=objectName(row);
-      return code&&name&&matchesQuery(q,code,name,JSON.stringify(row?.indicator||""));
-    })
-    .slice(0,MAX_PER_SOURCE)
-    .map((row:any)=>{
-      const title=objectName(row);
-      const code=objectCode(row);
-      return {
-        id:"sdg-"+code,
-        concept:"sdg-series",
-        title,
-        provider:"UN SDG",
-        providerId:"sdg",
-        indicator:code,
-        unit:unitFromDescription(title),
-        frequency:"Annual",
-        description:title,
-        normalized:true,
-        resultType:"series",
-        selectable:true,
-        sourceUrl:"https://unstats.un.org/SDGAPI/v1/sdg/Series/"+encodeURIComponent(code)
-      } satisfies SeriesCatalogItem;
-    });
+  const matched=rows.filter((row:any)=>{
+    const code=objectCode(row);
+    const name=objectName(row);
+    return code&&name&&matchesQuery(q,code,name,JSON.stringify(row?.indicator||""));
+  });
+
+  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
+    const title=objectName(row);
+    const code=objectCode(row);
+    return {
+      id:"sdg-"+code,
+      concept:"sdg-series",
+      title,
+      provider:"UN SDG",
+      providerId:"sdg",
+      indicator:code,
+      unit:unitFromDescription(title),
+      frequency:"Annual",
+      description:title,
+      normalized:true,
+      resultType:"series",
+      selectable:true,
+      sourceUrl:"https://unstats.un.org/SDGAPI/v1/sdg/Series/"+encodeURIComponent(code)
+    } satisfies SeriesCatalogItem;
+  });
+
+  return {items,total:matched.length};
 }
 
-async function unPopulation(q:string):Promise<SeriesCatalogItem[]>{
+async function unPopulation(q:string):Promise<SearchOutcome>{
   const token=process.env.UN_POPULATION_TOKEN;
-  if(!token) return [];
+  if(!token) return {items:[],total:0};
+
   const url=new URL("https://population.un.org/dataportalapi/api/v1/Indicators");
   url.searchParams.set("pageSize","1000");
+
   const res=await fetch(url,{
     headers:{Authorization:"Bearer "+token,Accept:"application/json"},
     cache:"no-store",
     signal:AbortSignal.timeout(9000)
   });
   if(!res.ok) throw new Error("HTTP "+res.status);
+
   const payload:any=await res.json();
   const rows=flattenObjects(payload);
-  return rows
-    .filter((row:any)=>{
-      const code=objectCode(row);
-      const name=objectName(row);
-      return code&&name&&matchesQuery(q,code,name,text(row?.description));
-    })
-    .slice(0,MAX_PER_SOURCE)
-    .map((row:any)=>{
-      const code=objectCode(row);
-      const title=objectName(row);
-      return {
-        id:"un-pop-"+code,
-        concept:"population-indicator",
-        title,
-        provider:"UN Population",
-        providerId:"un-population",
-        indicator:code,
-        unit:text(row.unit)||text(row.units)||"See provider metadata",
-        frequency:"Annual / provider-defined",
-        description:text(row.description)||title,
-        normalized:false,
-        resultType:"series",
-        selectable:false,
-        sourceUrl:"https://population.un.org/dataportal/"
-      } satisfies SeriesCatalogItem;
-    });
+  const matched=rows.filter((row:any)=>{
+    const code=objectCode(row);
+    const name=objectName(row);
+    return code&&name&&matchesQuery(q,code,name,text(row?.description));
+  });
+
+  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
+    const code=objectCode(row);
+    const title=objectName(row);
+    return {
+      id:"un-pop-"+code,
+      concept:"population-indicator",
+      title,
+      provider:"UN Population",
+      providerId:"un-population",
+      indicator:code,
+      unit:text(row.unit)||text(row.units)||"See provider metadata",
+      frequency:"Annual / provider-defined",
+      description:text(row.description)||title,
+      normalized:false,
+      resultType:"series",
+      selectable:false,
+      sourceUrl:"https://population.un.org/dataportal/"
+    } satisfies SeriesCatalogItem;
+  });
+
+  return {items,total:matched.length};
 }
 
-async function wto(q:string):Promise<SeriesCatalogItem[]>{
+async function wto(q:string):Promise<SearchOutcome>{
   const key=process.env.WTO_API_KEY;
-  if(!key) return [];
+  if(!key) return {items:[],total:0};
+
   const res=await fetch("https://api.wto.org/timeseries/v1/indicators?lang=1",{
     headers:{Accept:"application/json","Ocp-Apim-Subscription-Key":key},
     cache:"no-store",
     signal:AbortSignal.timeout(9000)
   });
   if(!res.ok) throw new Error("HTTP "+res.status);
+
   const payload:any=await res.json();
   const rows=flattenObjects(payload);
-  return rows
-    .filter((row:any)=>{
-      const code=objectCode(row);
-      const name=objectName(row);
-      return code&&name&&matchesQuery(q,code,name,text(row?.description));
-    })
-    .slice(0,MAX_PER_SOURCE)
-    .map((row:any)=>{
-      const code=objectCode(row);
-      const title=objectName(row);
-      return {
-        id:"wto-"+code,
-        concept:"trade-indicator",
-        title,
-        provider:"WTO",
-        providerId:"wto",
-        indicator:code,
-        unit:text(row.unit)||text(row.units)||"See WTO metadata",
-        frequency:wtoFrequency(code,text(row.frequency)),
-        description:text(row.description)||title,
-        normalized:true,
-        resultType:"series",
-        selectable:true,
-        sourceUrl:"https://stats.wto.org/"
-      } satisfies SeriesCatalogItem;
-    });
+  const matched=rows.filter((row:any)=>{
+    const code=objectCode(row);
+    const name=objectName(row);
+    return code&&name&&matchesQuery(q,code,name,text(row?.description));
+  });
+
+  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
+    const code=objectCode(row);
+    const title=objectName(row);
+    return {
+      id:"wto-"+code,
+      concept:"trade-indicator",
+      title,
+      provider:"WTO",
+      providerId:"wto",
+      indicator:code,
+      unit:text(row.unit)||text(row.units)||"See WTO metadata",
+      frequency:wtoFrequency(code,text(row.frequency)),
+      description:text(row.description)||title,
+      normalized:true,
+      resultType:"series",
+      selectable:true,
+      sourceUrl:"https://stats.wto.org/"
+    } satisfies SeriesCatalogItem;
+  });
+
+  return {items,total:matched.length};
 }
 
 const unhcrSeries=[
@@ -242,24 +267,25 @@ const unhcrSeries=[
   ["ooc","Other people of concern","People"]
 ] as const;
 
-async function unhcr(q:string):Promise<SeriesCatalogItem[]>{
-  return unhcrSeries
-    .filter(([code,title])=>matchesQuery(q,code,title,"displacement refugee asylum stateless population"))
-    .map(([code,title,unit])=>({
-      id:"unhcr-"+code,
-      concept:"forced-displacement",
-      title,
-      provider:"UNHCR",
-      providerId:"unhcr",
-      indicator:code,
-      unit,
-      frequency:"Annual",
-      description:"UNHCR Refugee Population Statistics: "+title.toLowerCase()+".",
-      normalized:true,
-      resultType:"series",
-      selectable:true,
-      sourceUrl:"https://api.unhcr.org/docs/refugee-statistics.html"
-    }));
+async function unhcr(q:string):Promise<SearchOutcome>{
+  const matched=unhcrSeries.filter(([code,title])=>matchesQuery(q,code,title,"displacement refugee asylum stateless population"));
+  const items=matched.slice(0,MAX_PER_SOURCE).map(([code,title,unit])=>({
+    id:"unhcr-"+code,
+    concept:"forced-displacement",
+    title,
+    provider:"UNHCR",
+    providerId:"unhcr",
+    indicator:code,
+    unit,
+    frequency:"Annual",
+    description:"UNHCR Refugee Population Statistics: "+title.toLowerCase()+".",
+    normalized:true,
+    resultType:"series",
+    selectable:true,
+    sourceUrl:"https://api.unhcr.org/docs/refugee-statistics.html"
+  } satisfies SeriesCatalogItem));
+
+  return {items,total:matched.length};
 }
 
 function decodeXml(value:string){
@@ -275,29 +301,34 @@ function dataflowsFromXml(xml:string){
   const result:{id:string;name:string;agency:string}[]=[];
   const regex=/<(?:\w+:)?Dataflow\b([^>]*)>([\s\S]*?)<\/(?:\w+:)?Dataflow>/gi;
   let match:RegExpExecArray|null;
-  while((match=regex.exec(xml))&&result.length<5000){
+
+  while((match=regex.exec(xml))&&result.length<15000){
     const attrs=match[1];
     const body=match[2];
     const id=(attrs.match(/\bid="([^"]+)"/i)||[])[1]||"";
     const agency=(attrs.match(/\bagencyID="([^"]+)"/i)||[])[1]||"";
-    const names=[...body.matchAll(/<(?:\w+:)?Name\b[^>]*>([\s\S]*?)<\/(?:\w+:)?Name>/gi)].map(x=>decodeXml(x[1].replace(/<[^>]+>/g,"").trim()));
+    const names=[...body.matchAll(/<(?:\w+:)?Name\b[^>]*>([\s\S]*?)<\/(?:\w+:)?Name>/gi)]
+      .map(x=>decodeXml(x[1].replace(/<[^>]+>/g,"").trim()));
     const name=names.find(Boolean)||id;
     if(id) result.push({id,name,agency});
   }
+
   return result;
 }
 
 function dataflowsFromJson(payload:any){
   const rows=flattenObjects(payload);
   const out:{id:string;name:string;agency:string}[]=[];
+
   for(const row of rows){
     const id=objectCode(row);
     const name=objectName(row);
     const agency=text(row.agencyID)||text(row.agencyId)||text(row.agency);
     const looksLikeFlow=Boolean(id&&name&&(agency||row.structure||row.version||row.isFinal!==undefined));
     if(looksLikeFlow) out.push({id,name,agency});
-    if(out.length>=5000) break;
+    if(out.length>=15000) break;
   }
+
   return out;
 }
 
@@ -312,58 +343,65 @@ const sdmxProviders:SdmxConfig[]=[
   {id:"eurostat",name:"Eurostat",url:"https://ec.europa.eu/eurostat/api/dissemination/sdmx/3.0/structure/dataflow/ESTAT/*?detail=allstubs&references=none&compress=false",docs:"https://ec.europa.eu/eurostat/"}
 ];
 
-async function sdmxDataflows(config:SdmxConfig,q:string):Promise<SeriesCatalogItem[]>{
+async function sdmxDataflows(config:SdmxConfig,q:string):Promise<SearchOutcome>{
   const res=await fetch(config.url,{
     headers:{Accept:"application/vnd.sdmx.structure+json;version=2.0, application/json;q=0.9, application/xml;q=0.8, text/xml;q=0.8"},
     next:{revalidate:86400},
     signal:AbortSignal.timeout(18000)
   });
   if(!res.ok) throw new Error("HTTP "+res.status);
+
   const raw=await res.text();
   const contentType=res.headers.get("content-type")||"";
   let flows:{id:string;name:string;agency:string}[]=[];
+
   if(contentType.includes("json")||raw.trim().startsWith("{")||raw.trim().startsWith("[")){
     try{ flows=dataflowsFromJson(JSON.parse(raw)); }catch{ flows=[]; }
   }
   if(!flows.length) flows=dataflowsFromXml(raw);
 
   const seen=new Set<string>();
-  return flows
-    .filter(flow=>{
-      if(seen.has(flow.id)) return false;
-      seen.add(flow.id);
-      return matchesQuery(q,flow.id,flow.name,flow.agency);
-    })
-    .slice(0,MAX_PER_SOURCE)
-    .map(flow=>({
-      id:config.id+"-dataset-"+flow.id,
-      concept:"provider-dataset",
-      title:flow.name,
-      provider:config.name,
-      providerId:config.id,
-      indicator:flow.id,
-      unit:"Dataset dimensions vary",
-      frequency:"Dataset-defined",
-      description:"Dataflow / dataset exposed through the "+config.name+" statistical API.",
-      normalized:false,
-      resultType:"dataset",
-      selectable:false,
-      sourceUrl:config.docs
-    }));
+  const matched=flows.filter(flow=>{
+    if(seen.has(flow.id)) return false;
+    seen.add(flow.id);
+    return matchesQuery(q,flow.id,flow.name,flow.agency);
+  });
+
+  const items=matched.slice(0,MAX_PER_SOURCE).map(flow=>({
+    id:config.id+"-dataset-"+flow.id,
+    concept:"provider-dataset",
+    title:flow.name,
+    provider:config.name,
+    providerId:config.id,
+    indicator:flow.id,
+    unit:"Dataset dimensions vary",
+    frequency:"Dataset-defined",
+    description:"Dataflow / dataset exposed through the "+config.name+" statistical API.",
+    normalized:false,
+    resultType:"dataset",
+    selectable:false,
+    sourceUrl:config.docs
+  } satisfies SeriesCatalogItem));
+
+  return {items,total:matched.length};
 }
 
-async function eia(q:string):Promise<SeriesCatalogItem[]>{
+async function eia(q:string):Promise<SearchOutcome>{
   const key=process.env.EIA_API_KEY;
-  if(!key) return [];
+  if(!key) return {items:[],total:0};
+
   const url=new URL("https://api.eia.gov/v2/");
   url.searchParams.set("api_key",key);
+
   const res=await fetch(url,{cache:"no-store",signal:AbortSignal.timeout(9000)});
   if(!res.ok) throw new Error("HTTP "+res.status);
+
   const payload:any=await res.json();
-  const routes=flattenObjects(payload)
-    .filter((row:any)=>objectCode(row)&&objectName(row)&&matchesQuery(q,objectCode(row),objectName(row)))
-    .slice(0,MAX_PER_SOURCE);
-  return routes.map((row:any)=>{
+  const matched=flattenObjects(payload).filter((row:any)=>
+    objectCode(row)&&objectName(row)&&matchesQuery(q,objectCode(row),objectName(row))
+  );
+
+  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
     const code=objectCode(row);
     const title=objectName(row);
     return {
@@ -382,9 +420,11 @@ async function eia(q:string):Promise<SeriesCatalogItem[]>{
       sourceUrl:"https://www.eia.gov/opendata/"
     } satisfies SeriesCatalogItem;
   });
+
+  return {items,total:matched.length};
 }
 
-type SearchFn=(q:string)=>Promise<SeriesCatalogItem[]>;
+type SearchFn=(q:string)=>Promise<SearchOutcome>;
 
 const dynamicSearchers:Record<string,SearchFn>={
   fred,sdg,"un-population":unPopulation,wto,unhcr,eia
@@ -405,29 +445,34 @@ export async function federatedCatalogSearch(q:string,providerIds:string[]):Prom
 
   const localCounts=new Map<string,number>();
   for(const item of local) localCounts.set(item.providerId,(localCounts.get(item.providerId)||0)+1);
-  for(const [providerId,count] of localCounts) status.push({providerId,state:"ok",count});
+  for(const [providerId,total] of localCounts){
+    status.push({providerId,state:"ok",...statusCount(total)});
+  }
 
   const defaultDynamic=["fred","sdg","unhcr","wto","un-population","eia"];
   const ids=includeAll
     ? (q.trim()?Object.keys(dynamicSearchers):defaultDynamic)
     : [...requested].filter(id=>dynamicSearchers[id]);
-  const jobs=ids.map(async providerId=>{
-    try{
-      const sourceResults=await dynamicSearchers[providerId](q);
-      return {providerId,sourceResults,error:null as string|null};
-    }catch(error){
-      return {providerId,sourceResults:[] as SeriesCatalogItem[],error:error instanceof Error?error.message:"Search failed"};
-    }
-  });
 
-  const resolved=await Promise.all(jobs);
+  const resolved=await Promise.all(ids.map(async providerId=>{
+    try{
+      const outcome=await dynamicSearchers[providerId](q);
+      return {providerId,outcome,error:null as string|null};
+    }catch(error){
+      return {
+        providerId,
+        outcome:{items:[] as SeriesCatalogItem[],total:0},
+        error:error instanceof Error?error.message:"Search failed"
+      };
+    }
+  }));
+
   for(const entry of resolved){
-    results.push(...entry.sourceResults);
+    results.push(...entry.outcome.items);
     status.push({
       providerId:entry.providerId,
       state:entry.error?"error":"ok",
-      count:entry.sourceResults.length,
-      capped:entry.sourceResults.length>=MAX_PER_SOURCE,
+      ...statusCount(entry.outcome.total),
       message:entry.error||undefined
     });
   }
@@ -444,4 +489,45 @@ export async function federatedCatalogSearch(q:string,providerIds:string[]):Prom
   }
 
   return {results:dedupe(results),status};
+}
+
+export async function providerCatalogueCounts():Promise<ProviderSearchStatus[]>{
+  const counts=new Map<string,ProviderSearchStatus>();
+
+  const local=searchCatalog("");
+  for(const provider of providers){
+    const total=local.filter(item=>item.providerId===provider.id).length;
+    if(total) counts.set(provider.id,{providerId:provider.id,state:"ok",...statusCount(total)});
+  }
+
+  const entries=Object.entries(dynamicSearchers);
+  const resolved=await Promise.all(entries.map(async ([providerId,search])=>{
+    try{
+      // FRED has no unfiltered list endpoint. A one-letter search gives a
+      // lower bound; once it exceeds the UI cap, 1000+ is sufficient.
+      const query=providerId==="fred"?"a":"";
+      const outcome=await search(query);
+      return {providerId,total:outcome.total,error:null as string|null};
+    }catch(error){
+      return {providerId,total:0,error:error instanceof Error?error.message:"Count failed"};
+    }
+  }));
+
+  for(const entry of resolved){
+    counts.set(entry.providerId,{
+      providerId:entry.providerId,
+      state:entry.error?"error":"ok",
+      ...statusCount(entry.total),
+      message:entry.error||undefined
+    });
+  }
+
+  return providers.map(provider=>
+    counts.get(provider.id)||{
+      providerId:provider.id,
+      state:"skipped",
+      count:0,
+      message:"No searchable catalogue has been indexed for this source yet."
+    }
+  );
 }
