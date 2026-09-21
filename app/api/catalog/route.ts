@@ -1,7 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
-import { searchCatalog } from "@/lib/catalog";
+import { federatedCatalogSearch } from "@/lib/federated-catalog";
+
+export const runtime="nodejs";
 
 export async function GET(request:NextRequest){
   const q=request.nextUrl.searchParams.get("q")||"";
-  return NextResponse.json({query:q,results:searchCatalog(q)});
+  const providers=(request.nextUrl.searchParams.get("providers")||"")
+    .split(",")
+    .map(x=>x.trim())
+    .filter(Boolean);
+
+  const result=await federatedCatalogSearch(q,providers);
+  return NextResponse.json({
+    query:q,
+    providers,
+    results:result.results,
+    sourceStatus:result.status
+  });
 }
