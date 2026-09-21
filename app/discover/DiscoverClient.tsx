@@ -19,6 +19,7 @@ type ProviderSearchStatus={
   providerId:string;
   state:"ok"|"skipped"|"error";
   count:number;
+  capped?:boolean;
   message?:string;
 };
 
@@ -38,7 +39,7 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
   useEffect(()=>{ if(location.hash==="#cart") setCartOpen(true); },[]);
 
   useEffect(()=>{
-    const timer=setTimeout(()=>setSearchQuery(query),350);
+    const timer=setTimeout(()=>setSearchQuery(query),650);
     return ()=>clearTimeout(timer);
   },[query]);
 
@@ -130,10 +131,16 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
                     onChange={()=>toggleProvider(provider.id)}
                   />
                   <span>{provider.shortName}</span>
-                  <small title={providerStatus(provider)}>
-                    {providerFilters.includes(provider.id)
-                      ? String(resultCounts.get(provider.id)||0)
-                      : provider.mode==="keyed"?(provider.configured?"Ready":"Key"):provider.queryable?"API":"Bulk"}
+                  <small title={searchQuery.trim()?("Matching variables from "+provider.shortName):providerStatus(provider)}>
+                    {loading&&searchQuery.trim()
+                      ?"…"
+                      :searchQuery.trim()
+                        ?statusMap.has(provider.id)
+                          ?((statusMap.get(provider.id)?.capped?"20+ ":String(statusMap.get(provider.id)?.count??0))+"")
+                          :"—"
+                        :providerFilters.includes(provider.id)
+                          ?String(resultCounts.get(provider.id)||0)
+                          :provider.mode==="keyed"?(provider.configured?"Ready":"Key"):provider.queryable?"API":"Bulk"}
                   </small>
                 </label>
               )}
