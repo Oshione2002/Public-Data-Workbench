@@ -26,6 +26,8 @@ type ProviderSearchStatus={
   message?:string;
 };
 
+const MAX_PREVIEW_COUNT=20;
+
 const frequencyOptions:{id:FrequencyId;label:string}[]=[
   {id:"annual",label:"Annual"},
   {id:"semiannual",label:"Semiannual"},
@@ -58,10 +60,11 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
   const [results,setResults]=useState<SeriesCatalogItem[]>([]);
   const [allProviders,setAllProviders]=useState<ProviderInfo[]>([]);
   const [sourceStatus,setSourceStatus]=useState<ProviderSearchStatus[]>([]);
+  const [catalogueStatus,setCatalogueStatus]=useState<ProviderSearchStatus[]>([]);
   const [loading,setLoading]=useState(true);
   const [searchQuery,setSearchQuery]=useState(initialQuery);
   const [providerFilters,setProviderFilters]=useState<string[]>([]);
-  const [frequencyFilters,setFrequencyFilters]=useState<FrequencyId[]>(["annual"]);
+  const [frequencyFilters,setFrequencyFilters]=useState<FrequencyId[]>([]);
   const [filtersOpen,setFiltersOpen]=useState(false);
   const [cartOpen,setCartOpen]=useState(false);
   const [inspected,setInspected]=useState<SeriesCatalogItem|null>(null);
@@ -76,10 +79,17 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
 
   useEffect(()=>{
     const controller=new AbortController();
+
     fetch("/api/providers",{signal:controller.signal})
       .then(r=>r.json())
       .then(data=>setAllProviders(Array.isArray(data.providers)?data.providers:[]))
       .catch(()=>{});
+
+    fetch("/api/source-counts",{signal:controller.signal})
+      .then(r=>r.json())
+      .then(data=>setCatalogueStatus(Array.isArray(data.sources)?data.sources:[]))
+      .catch(()=>{});
+
     return ()=>controller.abort();
   },[]);
 
@@ -132,6 +142,12 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
     return map;
   },[sourceStatus]);
 
+  const catalogueStatusMap=useMemo(()=>{
+    const map=new Map<string,ProviderSearchStatus>();
+    catalogueStatus.forEach(status=>map.set(status.providerId,status));
+    return map;
+  },[catalogueStatus]);
+
   const selectedProviderCards=useMemo(()=>{
     if(providerFilters.length===0) return [];
     return providerFilters
@@ -175,23 +191,47 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
   function providerBadge(provider:ProviderInfo){
     if(searchQuery.trim()){
       if(loading) return "…";
+
       const status=statusMap.get(provider.id);
       if(status?.state==="error") return "!";
-      if(status?.state==="skipped") return "—";
-      const count=resultCounts.get(provider.id)||0;
-      return status?.capped?count+"+":String(count);
+      if(status?.state==="skipped") return "0";
+
+      if(frequencyFilters.length===0){
+        const count=status?.count??0;
+        return status?.capped?count+"+":String(count);
+      }
+
+      const visibleCount=resultCounts.get(provider.id)||0;
+      return status?.capped&&visibleCount>=MAX_PREVIEW_COUNT?visibleCount+"+":String(visibleCount);
     }
-    if(providerFilters.includes(provider.id)) return String(resultCounts.get(provider.id)||0);
-    return provider.mode==="keyed"?(provider.configured?"Ready":"Key"):provider.queryable?"API":"Bulk";
+
+    const status=catalogueStatusMap.get(provider.id);
+    if(!status) return "…";
+    if(status.state==="error") return "!";
+    if(status.state==="skipped") return "0";
+    return status.capped?status.count+"+":String(status.count);
   }
 
   function providerBadgeTitle(provider:ProviderInfo){
-    if(!searchQuery.trim()) return providerStatus(provider);
+    if(!searchQuery.trim()){
+      const status=catalogueStatusMap.get(provider.id);
+      if(!status) return "Counting searchable catalogue entries…";
+      if(status.state==="error") return status.message||"Could not count this source";
+      if(status.state==="skipped") return status.message||"No searchable catalogue has been indexed yet";
+      return (status.capped?"At least ":"")+status.count+" searchable catalogue entr"+(status.count===1?"y":"ies")+" currently available in the workbench";
+    }
+
     const status=statusMap.get(provider.id);
     if(status?.state==="error") return status.message||"Provider search failed";
     if(status?.state==="skipped") return status.message||"Provider catalogue is not searchable yet";
+
+    if(frequencyFilters.length===0){
+      const count=status?.count??0;
+      return (status?.capped?"At least ":"")+count+" matching result"+(count===1?"":"s");
+    }
+
     const count=resultCounts.get(provider.id)||0;
-    return (status?.capped?"At least ":"")+count+" matching result"+(count===1?"":"s")+" after the active frequency filter";
+    return count+" matching result"+(count===1?"":"s")+" after the active frequency filter";
   }
 
   return <div className="discoverShell">
