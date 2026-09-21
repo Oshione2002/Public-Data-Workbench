@@ -1,5 +1,5 @@
 import { searchCatalog, type SeriesCatalogItem } from "@/lib/catalog";
-import { getProvider, providers } from "@/lib/providers";
+import { getProvider, providers, type ProviderFrequency } from "@/lib/providers";
 
 export type ProviderSearchStatus={
   providerId:string;
@@ -7,6 +7,8 @@ export type ProviderSearchStatus={
   count:number;
   capped?:boolean;
   message?:string;
+  frequencyCounts?:Partial<Record<ProviderFrequency,number>>;
+  frequencyCapped?:Partial<Record<ProviderFrequency,boolean>>;
 };
 
 type SearchResponse={
@@ -17,6 +19,8 @@ type SearchResponse={
 type SearchOutcome={
   items:SeriesCatalogItem[];
   total:number;
+  frequencyCounts?:Partial<Record<ProviderFrequency,number>>;
+  frequencyCapped?:Partial<Record<ProviderFrequency,boolean>>;
 };
 
 const MAX_PER_SOURCE=20;
@@ -97,6 +101,50 @@ function statusCount(total:number){
   return {count:Math.min(total,BADGE_CAP),capped:total>BADGE_CAP};
 }
 
+function frequencyIds(value:string):ProviderFrequency[]{
+  const v=value.toLowerCase();
+  const out:ProviderFrequency[]=[];
+  const add=(id:ProviderFrequency)=>{ if(!out.includes(id)) out.push(id); };
+
+  if(/\bannual\b|\byearly\b|\byear\b|(^|[^a-z])a([^a-z]|$)/.test(v)) add("annual");
+  if(/semi[- ]?annual|half[- ]?year|biannual/.test(v)) add("semiannual");
+  if(/\bquarterly\b|\bquarter\b|(^|[^a-z])q([^a-z]|$)/.test(v)) add("quarterly");
+  if(/\bmonthly\b|\bmonth\b|(^|[^a-z])m([^a-z]|$)/.test(v)) add("monthly");
+  if(/\bweekly\b|\bweek\b|(^|[^a-z])w([^a-z]|$)/.test(v)) add("weekly");
+  if(/\bdaily\b|\bday\b|business day|(^|[^a-z])d([^a-z]|$)/.test(v)) add("daily");
+  if(/\bhourly\b|\bhour\b|(^|[^a-z])h([^a-z]|$)/.test(v)) add("hourly");
+
+  return out;
+}
+
+function incrementFrequency(
+  counts:Partial<Record<ProviderFrequency,number>>,
+  frequency:string,
+  amount=1
+){
+  for(const id of frequencyIds(frequency)){
+    counts[id]=(counts[id]||0)+amount;
+  }
+}
+
+function countsFromItems(items:SeriesCatalogItem[]){
+  const counts:Partial<Record<ProviderFrequency,number>>={};
+  for(const item of items) incrementFrequency(counts,item.frequency);
+  return counts;
+}
+
+function capFrequencyCounts(counts:Partial<Record<ProviderFrequency,number>>){
+  const capped:Partial<Record<ProviderFrequency,boolean>>={};
+  const normalized:Partial<Record<ProviderFrequency,number>>={};
+
+  for(const [key,value] of Object.entries(counts) as [ProviderFrequency,number][]){
+    normalized[key]=Math.min(value,BADGE_CAP);
+    if(value>BADGE_CAP) capped[key]=true;
+  }
+
+  return {frequencyCounts:normalized,frequencyCapped:capped};
+}
+
 async function fred(q:string):Promise<SearchOutcome>{
   const key=process.env.FRED_API_KEY;
   if(!key) return {items:[],total:0};
@@ -130,7 +178,23 @@ async function fred(q:string):Promise<SearchOutcome>{
   } satisfies SeriesCatalogItem));
 
   const total=Number(payload?.count);
-  return {items,total:Number.isFinite(total)?total:rows.length};
+  const frequencyCounts=countsFromItems(rows.map((row:any)=>({
+    id:"",
+    concept:"",
+    title:"",
+    provider:"",
+    providerId:"",
+    indicator:"",
+    unit:"",
+    frequency:text(row.frequency)||"Various",
+    description:"",
+    normalized:false
+  } as SeriesCatalogItem)));
+  return {
+    items,
+    total:Number.isFinite(total)?total:rows.length,
+    ...capFrequencyCounts(frequencyCounts)
+  };
 }
 
 async function sdg(q:string):Promise<SearchOutcome>{
@@ -168,7 +232,7 @@ async function sdg(q:string):Promise<SearchOutcome>{
     } satisfies SeriesCatalogItem;
   });
 
-  return {items,total:matched.length};
+  return {items,total:matched.length,...capFrequencyCounts({annual:matched.length})};
 }
 
 async function unPopulation(q:string):Promise<SearchOutcome>{
@@ -213,7 +277,7 @@ async function unPopulation(q:string):Promise<SearchOutcome>{
     } satisfies SeriesCatalogItem;
   });
 
-  return {items,total:matched.length};
+  return {items,total:matched.length,...capFrequencyCounts({annual:matched.length})};
 }
 
 async function wto(q:string):Promise<SearchOutcome>{
@@ -255,7 +319,13 @@ async function wto(q:string):Promise<SearchOutcome>{
     } satisfies SeriesCatalogItem;
   });
 
-  return {items,total:matched.length};
+  const frequencyCounts:Partial<Record<ProviderFrequency,number>>={};
+  for(const row of matched){
+    const code=objectCode(row);
+    incrementFrequency(frequencyCounts,wtoFrequency(code,text(row.frequency)));
+  }
+
+  return {items,total:matched.length,...capFrequencyCounts(frequencyCounts)};
 }
 
 const unhcrSeries=[
@@ -285,7 +355,7 @@ async function unhcr(q:string):Promise<SearchOutcome>{
     sourceUrl:"https://api.unhcr.org/docs/refugee-statistics.html"
   } satisfies SeriesCatalogItem));
 
-  return {items,total:matched.length};
+  return {items,total:matched.length,...capFrequencyCounts({annual:matched.length})};
 }
 
 function decodeXml(value:string){
@@ -446,7 +516,13 @@ export async function federatedCatalogSearch(q:string,providerIds:string[]):Prom
   const localCounts=new Map<string,number>();
   for(const item of local) localCounts.set(item.providerId,(localCounts.get(item.providerId)||0)+1);
   for(const [providerId,total] of localCounts){
-    status.push({providerId,state:"ok",...statusCount(total)});
+    const providerItems=local.filter(item=>item.providerId===providerId);
+    status.push({
+      providerId,
+      state:"ok",
+      ...statusCount(total),
+      ...capFrequencyCounts(countsFromItems(providerItems))
+    });
   }
 
   const defaultDynamic=["fred","sdg","unhcr","wto","un-population","eia"];
@@ -473,6 +549,8 @@ export async function federatedCatalogSearch(q:string,providerIds:string[]):Prom
       providerId:entry.providerId,
       state:entry.error?"error":"ok",
       ...statusCount(entry.outcome.total),
+      frequencyCounts:entry.outcome.frequencyCounts,
+      frequencyCapped:entry.outcome.frequencyCapped,
       message:entry.error||undefined
     });
   }
@@ -497,7 +575,15 @@ export async function providerCatalogueCounts():Promise<ProviderSearchStatus[]>{
   const local=searchCatalog("");
   for(const provider of providers){
     const total=local.filter(item=>item.providerId===provider.id).length;
-    if(total) counts.set(provider.id,{providerId:provider.id,state:"ok",...statusCount(total)});
+    if(total){
+      const providerItems=local.filter(item=>item.providerId===provider.id);
+      counts.set(provider.id,{
+        providerId:provider.id,
+        state:"ok",
+        ...statusCount(total),
+        ...capFrequencyCounts(countsFromItems(providerItems))
+      });
+    }
   }
 
   const entries=Object.entries(dynamicSearchers);
@@ -507,9 +593,21 @@ export async function providerCatalogueCounts():Promise<ProviderSearchStatus[]>{
       // lower bound; once it exceeds the UI cap, 1000+ is sufficient.
       const query=providerId==="fred"?"a":"";
       const outcome=await search(query);
-      return {providerId,total:outcome.total,error:null as string|null};
+      return {
+        providerId,
+        total:outcome.total,
+        frequencyCounts:outcome.frequencyCounts,
+        frequencyCapped:outcome.frequencyCapped,
+        error:null as string|null
+      };
     }catch(error){
-      return {providerId,total:0,error:error instanceof Error?error.message:"Count failed"};
+      return {
+        providerId,
+        total:0,
+        frequencyCounts:undefined,
+        frequencyCapped:undefined,
+        error:error instanceof Error?error.message:"Count failed"
+      };
     }
   }));
 
@@ -518,6 +616,8 @@ export async function providerCatalogueCounts():Promise<ProviderSearchStatus[]>{
       providerId:entry.providerId,
       state:entry.error?"error":"ok",
       ...statusCount(entry.total),
+      frequencyCounts:entry.frequencyCounts,
+      frequencyCapped:entry.frequencyCapped,
       message:entry.error||undefined
     });
   }
@@ -530,4 +630,23 @@ export async function providerCatalogueCounts():Promise<ProviderSearchStatus[]>{
       message:"No searchable catalogue has been indexed for this source yet."
     }
   );
+}
+
+
+export function aggregateFrequencyCounts(statuses:ProviderSearchStatus[]){
+  const counts:Partial<Record<ProviderFrequency,number>>={};
+  const capped:Partial<Record<ProviderFrequency,boolean>>={};
+
+  for(const status of statuses){
+    for(const [frequency,value] of Object.entries(status.frequencyCounts||{}) as [ProviderFrequency,number][]){
+      counts[frequency]=(counts[frequency]||0)+value;
+      if(status.frequencyCapped?.[frequency]) capped[frequency]=true;
+      if((counts[frequency]||0)>BADGE_CAP){
+        counts[frequency]=BADGE_CAP;
+        capped[frequency]=true;
+      }
+    }
+  }
+
+  return {counts,capped};
 }
