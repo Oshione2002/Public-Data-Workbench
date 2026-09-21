@@ -23,6 +23,7 @@ type ProviderSearchStatus={
   state:"ok"|"skipped"|"error";
   count:number;
   capped?:boolean;
+  partial?:boolean;
   message?:string;
 };
 
@@ -218,11 +219,11 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
 
       const status=statusMap.get(provider.id);
       if(status?.state==="error") return "!";
-      if(status?.state==="skipped") return "0";
+      if(status?.state==="skipped") return "—";
 
       if(frequencyFilters.length===0){
         const count=status?.count??0;
-        return status?.capped?count+"+":String(count);
+        return status?.capped||status?.partial?count+"+":String(count);
       }
 
       const visibleCount=resultCounts.get(provider.id)||0;
@@ -232,8 +233,8 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
     const status=catalogueStatusMap.get(provider.id);
     if(!status) return "…";
     if(status.state==="error") return "!";
-    if(status.state==="skipped") return "0";
-    return status.capped?status.count+"+":String(status.count);
+    if(status.state==="skipped") return "—";
+    return status.capped||status.partial?status.count+"+":String(status.count);
   }
 
   function providerBadgeTitle(provider:ProviderInfo){
@@ -242,6 +243,7 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
       if(!status) return "Counting searchable catalogue entries…";
       if(status.state==="error") return status.message||"Could not count this source";
       if(status.state==="skipped") return status.message||"No searchable catalogue has been indexed yet";
+      if(status.partial) return "At least "+status.count+" seeded catalogue entr"+(status.count===1?"y":"ies")+"; the provider's full catalogue is not indexed yet";
       return (status.capped?"At least ":"")+status.count+" searchable catalogue entr"+(status.count===1?"y":"ies")+" currently available in the workbench";
     }
 
@@ -251,6 +253,7 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
 
     if(frequencyFilters.length===0){
       const count=status?.count??0;
+      if(status?.partial) return "At least "+count+" matching seeded result"+(count===1?"":"s")+"; the provider's full catalogue is not indexed yet";
       return (status?.capped?"At least ":"")+count+" matching result"+(count===1?"":"s");
     }
 
