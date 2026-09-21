@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { federatedCatalogSearch } from "@/lib/federated-catalog";
+import { aggregateFrequencyCounts, federatedCatalogSearch } from "@/lib/federated-catalog";
 
 export const runtime="nodejs";
 
@@ -11,10 +11,13 @@ export async function GET(request:NextRequest){
     .filter(Boolean);
 
   const result=await federatedCatalogSearch(q,providers);
+  const frequencies=aggregateFrequencyCounts(result.status);
+
   return NextResponse.json({
     query:q,
     providers,
     results:result.results,
-    sourceStatus:result.status
+    sourceStatus:result.status,
+    frequencies
   });
 }
