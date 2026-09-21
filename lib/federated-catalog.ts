@@ -399,7 +399,8 @@ export async function federatedCatalogSearch(q:string,providerIds:string[]):Prom
   for(const item of local) localCounts.set(item.providerId,(localCounts.get(item.providerId)||0)+1);
   for(const [providerId,count] of localCounts) status.push({providerId,state:"ok",count});
 
-  const ids=includeAll?Object.keys(dynamicSearchers):[...requested].filter(id=>dynamicSearchers[id]);
+  const defaultDynamic=["fred","sdg","unhcr","wto","un-population","eia"];
+  const ids=includeAll?defaultDynamic:[...requested].filter(id=>dynamicSearchers[id]);
   const jobs=ids.map(async providerId=>{
     try{
       const sourceResults=await dynamicSearchers[providerId](q);
