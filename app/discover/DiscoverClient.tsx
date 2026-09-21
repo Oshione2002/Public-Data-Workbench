@@ -26,6 +26,11 @@ type ProviderSearchStatus={
   message?:string;
 };
 
+type FrequencySummary={
+  counts:Partial<Record<FrequencyId,number>>;
+  capped:Partial<Record<FrequencyId,boolean>>;
+};
+
 const MAX_PREVIEW_COUNT=20;
 
 const frequencyOptions:{id:FrequencyId;label:string}[]=[
@@ -61,6 +66,8 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
   const [allProviders,setAllProviders]=useState<ProviderInfo[]>([]);
   const [sourceStatus,setSourceStatus]=useState<ProviderSearchStatus[]>([]);
   const [catalogueStatus,setCatalogueStatus]=useState<ProviderSearchStatus[]>([]);
+  const [searchFrequencySummary,setSearchFrequencySummary]=useState<FrequencySummary>({counts:{},capped:{}});
+  const [catalogueFrequencySummary,setCatalogueFrequencySummary]=useState<FrequencySummary>({counts:{},capped:{}});
   const [loading,setLoading]=useState(true);
   const [searchQuery,setSearchQuery]=useState(initialQuery);
   const [providerFilters,setProviderFilters]=useState<string[]>([]);
@@ -87,7 +94,13 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
 
     fetch("/api/source-counts",{signal:controller.signal})
       .then(r=>r.json())
-      .then(data=>setCatalogueStatus(Array.isArray(data.sources)?data.sources:[]))
+      .then(data=>{
+        setCatalogueStatus(Array.isArray(data.sources)?data.sources:[]);
+        setCatalogueFrequencySummary({
+          counts:data?.frequencies?.counts||{},
+          capped:data?.frequencies?.capped||{}
+        });
+      })
       .catch(()=>{});
 
     return ()=>controller.abort();
@@ -106,6 +119,10 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
       .then(data=>{
         setResults(Array.isArray(data.results)?data.results:[]);
         setSourceStatus(Array.isArray(data.sourceStatus)?data.sourceStatus:[]);
+        setSearchFrequencySummary({
+          counts:data?.frequencies?.counts||{},
+          capped:data?.frequencies?.capped||{}
+        });
       })
       .catch(()=>{})
       .finally(()=>setLoading(false));
@@ -166,13 +183,20 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
     return set;
   },[activeProviderSet]);
 
-  const frequencyCounts=useMemo(()=>{
-    const counts=new Map<FrequencyId,number>();
-    for(const option of frequencyOptions){
-      counts.set(option.id,results.filter(item=>itemMatchesFrequency(item,option.id)).length);
-    }
-    return counts;
-  },[results,providerMap]);
+  const frequencySummary=useMemo(()=>{
+    const useSearchSummary=Boolean(searchQuery.trim()||providerFilters.length);
+    return useSearchSummary?searchFrequencySummary:catalogueFrequencySummary;
+  },[searchQuery,providerFilters,searchFrequencySummary,catalogueFrequencySummary]);
+
+  function frequencyBadge(id:FrequencyId){
+    const count=frequencySummary.counts[id]||0;
+    return frequencySummary.capped[id]?count+"+":String(count);
+  }
+
+  function frequencyBadgeTitle(id:FrequencyId,label:string){
+    const count=frequencySummary.counts[id]||0;
+    return (frequencySummary.capped[id]?"At least ":"")+count+" available "+label.toLowerCase()+" variable"+(count===1?"":"s");
+  }
 
   function toggleProvider(id:string){
     setProviderFilters(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
@@ -273,7 +297,6 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
           <div className="frequencyFilterList">
             {frequencyOptions.map(option=>{
               const supported=availableFrequencies.has(option.id);
-              const count=frequencyCounts.get(option.id)||0;
               return <label className={"check frequencyCheck "+(!supported?"unsupported":"")} key={option.id}>
                 <input
                   type="checkbox"
@@ -282,7 +305,7 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
                   onChange={()=>toggleFrequency(option.id)}
                 />
                 <span>{option.label}</span>
-                <small>{searchQuery.trim()?String(count):supported?"":"—"}</small>
+                <small title={frequencyBadgeTitle(option.id,option.label)}>{frequencyBadge(option.id)}</small>
               </label>;
             })}
           </div>
