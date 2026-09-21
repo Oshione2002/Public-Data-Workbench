@@ -45,6 +45,13 @@ function unitFromDescription(description:string){
   return match?match[1]:"See provider metadata";
 }
 
+function wtoFrequency(code:string,raw:string){
+  if(/_A_/i.test(code)) return "Annual";
+  if(/_Q_/i.test(code)) return "Quarterly";
+  if(/_M_/i.test(code)) return "Monthly";
+  return raw||"Provider-defined";
+}
+
 function matchesQuery(q:string,...values:string[]){
   const term=q.trim().toLowerCase();
   if(!term) return true;
@@ -138,9 +145,9 @@ async function sdg(q:string):Promise<SeriesCatalogItem[]>{
         unit:unitFromDescription(title),
         frequency:"Provider-defined",
         description:title,
-        normalized:false,
+        normalized:true,
         resultType:"series",
-        selectable:false,
+        selectable:true,
         sourceUrl:"https://unstats.un.org/SDGAPI/v1/sdg/Series/"+encodeURIComponent(code)
       } satisfies SeriesCatalogItem;
     });
@@ -216,7 +223,7 @@ async function wto(q:string):Promise<SeriesCatalogItem[]>{
         providerId:"wto",
         indicator:code,
         unit:text(row.unit)||text(row.units)||"See WTO metadata",
-        frequency:text(row.frequency)||"Annual / quarterly / monthly",
+        frequency:wtoFrequency(code,text(row.frequency)),
         description:text(row.description)||title,
         normalized:false,
         resultType:"series",
@@ -248,9 +255,9 @@ async function unhcr(q:string):Promise<SeriesCatalogItem[]>{
       unit,
       frequency:"Annual",
       description:"UNHCR Refugee Population Statistics: "+title.toLowerCase()+".",
-      normalized:false,
+      normalized:true,
       resultType:"series",
-      selectable:false,
+      selectable:true,
       sourceUrl:"https://api.unhcr.org/docs/refugee-statistics.html"
     }));
 }
@@ -297,19 +304,19 @@ function dataflowsFromJson(payload:any){
 type SdmxConfig={id:string;name:string;url:string;docs:string};
 
 const sdmxProviders:SdmxConfig[]=[
-  {id:"ilo",name:"ILO",url:"https://sdmx.ilo.org/rest/dataflow/all/all/latest",docs:"https://sdmx.ilo.org/"},
-  {id:"oecd",name:"OECD",url:"https://sdmx.oecd.org/public/rest/dataflow/all",docs:"https://data-explorer.oecd.org/"},
-  {id:"unicef",name:"UNICEF",url:"https://sdmx.data.unicef.org/ws/public/sdmxapi/rest/dataflow/all/all/latest/?format=sdmx-json&detail=full&references=none",docs:"https://sdmx.data.unicef.org/"},
-  {id:"ecb",name:"ECB",url:"https://data-api.ecb.europa.eu/service/dataflow",docs:"https://data.ecb.europa.eu/"},
-  {id:"bis",name:"BIS",url:"https://stats.bis.org/api/v2/structure/dataflow/all/all/latest",docs:"https://stats.bis.org/"},
-  {id:"eurostat",name:"Eurostat",url:"https://ec.europa.eu/eurostat/api/dissemination/sdmx/3.0/structure/dataflow/ESTAT/*?compress=false",docs:"https://ec.europa.eu/eurostat/"}
+  {id:"ilo",name:"ILO",url:"https://sdmx.ilo.org/rest/dataflow/all/all/latest?detail=allstubs&references=none",docs:"https://sdmx.ilo.org/"},
+  {id:"oecd",name:"OECD",url:"https://sdmx.oecd.org/public/rest/dataflow/all?detail=allstubs&references=none",docs:"https://data-explorer.oecd.org/"},
+  {id:"unicef",name:"UNICEF",url:"https://sdmx.data.unicef.org/ws/public/sdmxapi/rest/dataflow/all/all/latest/?format=sdmx-json&detail=allstubs&references=none",docs:"https://sdmx.data.unicef.org/"},
+  {id:"ecb",name:"ECB",url:"https://data-api.ecb.europa.eu/service/dataflow/all/all/latest?detail=allstubs&references=none",docs:"https://data.ecb.europa.eu/"},
+  {id:"bis",name:"BIS",url:"https://stats.bis.org/api/v2/structure/dataflow/all/all/latest?detail=allstubs&references=none",docs:"https://stats.bis.org/"},
+  {id:"eurostat",name:"Eurostat",url:"https://ec.europa.eu/eurostat/api/dissemination/sdmx/3.0/structure/dataflow/ESTAT/*?detail=allstubs&references=none&compress=false",docs:"https://ec.europa.eu/eurostat/"}
 ];
 
 async function sdmxDataflows(config:SdmxConfig,q:string):Promise<SeriesCatalogItem[]>{
   const res=await fetch(config.url,{
     headers:{Accept:"application/vnd.sdmx.structure+json;version=2.0, application/json;q=0.9, application/xml;q=0.8, text/xml;q=0.8"},
-    next:{revalidate:21600},
-    signal:AbortSignal.timeout(10000)
+    next:{revalidate:86400},
+    signal:AbortSignal.timeout(18000)
   });
   if(!res.ok) throw new Error("HTTP "+res.status);
   const raw=await res.text();
