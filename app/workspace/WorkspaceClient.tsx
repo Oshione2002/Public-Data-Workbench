@@ -401,7 +401,7 @@ export default function WorkspaceClient(){
     <aside className="workspaceInspector">
       <h2 style={{fontFamily:"Georgia,serif",fontWeight:500,margin:"0 0 10px"}}>Dataset</h2>
       <div className="sectionCopy">
-        {countries.length?countries.map(country=>country.code).join(", "):"No country selected"}+" · "+start+"–"+end
+        {(countries.length?countries.map(country=>country.code).join(", "):"No country selected")+" · "+start+"–"+end}
       </div>
 
       <div className="metaList">
