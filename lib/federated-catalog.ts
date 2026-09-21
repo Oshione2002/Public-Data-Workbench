@@ -5,6 +5,7 @@ export type ProviderSearchStatus={
   providerId:string;
   state:"ok"|"skipped"|"error";
   count:number;
+  capped?:boolean;
   message?:string;
 };
 
@@ -400,7 +401,9 @@ export async function federatedCatalogSearch(q:string,providerIds:string[]):Prom
   for(const [providerId,count] of localCounts) status.push({providerId,state:"ok",count});
 
   const defaultDynamic=["fred","sdg","unhcr","wto","un-population","eia"];
-  const ids=includeAll?defaultDynamic:[...requested].filter(id=>dynamicSearchers[id]);
+  const ids=includeAll
+    ? (q.trim()?Object.keys(dynamicSearchers):defaultDynamic)
+    : [...requested].filter(id=>dynamicSearchers[id]);
   const jobs=ids.map(async providerId=>{
     try{
       const sourceResults=await dynamicSearchers[providerId](q);
@@ -417,6 +420,7 @@ export async function federatedCatalogSearch(q:string,providerIds:string[]):Prom
       providerId:entry.providerId,
       state:entry.error?"error":"ok",
       count:entry.sourceResults.length,
+      capped:entry.sourceResults.length>=MAX_PER_SOURCE,
       message:entry.error||undefined
     });
   }
