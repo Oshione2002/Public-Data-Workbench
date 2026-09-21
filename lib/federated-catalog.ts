@@ -20,6 +20,7 @@ type SearchResponse={
 type SearchOutcome={
   items:SeriesCatalogItem[];
   total:number;
+  partial?:boolean;
   frequencyCounts?:Partial<Record<ProviderFrequency,number>>;
   frequencyCapped?:Partial<Record<ProviderFrequency,boolean>>;
 };
@@ -73,12 +74,20 @@ function matchesQuery(q:string,...values:string[]){
 
 function dedupe(items:SeriesCatalogItem[]){
   const seen=new Set<string>();
-  return items.filter(item=>{
-    const key=item.providerId+"|"+item.indicator+"|"+item.title;
-    if(seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  return items
+    .filter(item=>{
+      const key=item.providerId+"|"+item.indicator+"|"+item.title;
+      if(seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a,b)=>{
+      const title=a.title.localeCompare(b.title,undefined,{sensitivity:"base",numeric:true});
+      if(title!==0) return title;
+      const provider=a.provider.localeCompare(b.provider,undefined,{sensitivity:"base"});
+      if(provider!==0) return provider;
+      return a.indicator.localeCompare(b.indicator,undefined,{sensitivity:"base",numeric:true});
+    });
 }
 
 function flattenObjects(value:unknown,out:any[]=[],depth=0){
@@ -190,6 +199,317 @@ async function worldBank(q:string):Promise<SearchOutcome>{
     total:matched.length,
     ...capFrequencyCounts({annual:matched.length})
   };
+}
+
+
+async function unesco(q:string):Promise<SearchOutcome>{
+  const url="https://api.uis.unesco.org/api/public/definitions/indicators";
+  const res=await fetch(url,{
+    headers:{Accept:"application/json"},
+    next:{revalidate:86400},
+    signal:AbortSignal.timeout(18000)
+  });
+  if(!res.ok) throw new Error("HTTP "+res.status);
+
+  const payload:any=await res.json();
+  const rows=Array.isArray(payload)?payload:flattenObjects(payload);
+  const matched=rows.filter((row:any)=>{
+    const code=text(row.indicatorCode)||text(row.code)||objectCode(row);
+    const name=text(row.indicatorName)||text(row.name)||text(row.label)||objectName(row);
+    const theme=text(row.theme)||text(row.themeName);
+    return code&&name&&matchesQuery(q,code,name,theme,text(row.description));
+  });
+
+  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
+    const code=text(row.indicatorCode)||text(row.code)||objectCode(row);
+    const title=text(row.indicatorName)||text(row.name)||text(row.label)||objectName(row);
+    return {
+      id:"unesco-"+code,
+      concept:"unesco-indicator",
+      title,
+      provider:"UNESCO UIS",
+      providerId:"unesco",
+      indicator:code,
+      unit:text(row.unit)||text(row.unitName)||"See UIS metadata",
+      frequency:"Annual",
+      description:text(row.description)||text(row.definition)||title,
+      normalized:false,
+      resultType:"series",
+      selectable:false,
+      sourceUrl:"https://api.uis.unesco.org/api/public/documentation/"
+    } satisfies SeriesCatalogItem;
+  });
+
+  return {items,total:matched.length,...capFrequencyCounts({annual:matched.length})};
+}
+
+async function adb(q:string):Promise<SearchOutcome>{
+  const url="https://kidb.adb.org/api/v5/sdmx/structure/codelist/ADB/CL_KIDB_INDICATORS/+?format=sdmx-json";
+  const res=await fetch(url,{
+    headers:{Accept:"application/json"},
+    next:{revalidate:86400},
+    signal:AbortSignal.timeout(18000)
+  });
+  if(!res.ok) throw new Error("HTTP "+res.status);
+
+  const payload:any=await res.json();
+  const rows=flattenObjects(payload);
+  const seen=new Set<string>();
+  const matched=rows.filter((row:any)=>{
+    const code=objectCode(row);
+    const name=objectName(row);
+    if(!code||!name||seen.has(code)) return false;
+    seen.add(code);
+    return matchesQuery(q,code,name,text(row.description));
+  });
+
+  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
+    const code=objectCode(row);
+    const title=objectName(row);
+    return {
+      id:"adb-"+code,
+      concept:"adb-indicator",
+      title,
+      provider:"ADB",
+      providerId:"adb",
+      indicator:code,
+      unit:text(row.unit)||text(row.units)||"See ADB metadata",
+      frequency:"Annual",
+      description:text(row.description)||title,
+      normalized:false,
+      resultType:"series",
+      selectable:false,
+      sourceUrl:"https://kidb.adb.org/api"
+    } satisfies SeriesCatalogItem;
+  });
+
+  return {items,total:matched.length,...capFrequencyCounts({annual:matched.length})};
+}
+
+async function fao(q:string):Promise<SearchOutcome>{
+  const url="https://fenixservices.fao.org/faostat/api/v1/en/groupsanddomains";
+  const res=await fetch(url,{
+    headers:{Accept:"application/json"},
+    next:{revalidate:86400},
+    signal:AbortSignal.timeout(18000)
+  });
+  if(!res.ok) throw new Error("HTTP "+res.status);
+
+  const payload:any=await res.json();
+  const rows=flattenObjects(payload);
+  const seen=new Set<string>();
+  const matched=rows.filter((row:any)=>{
+    const code=text(row.domain_code)||text(row.domainCode)||text(row.DomainCode)||text(row.code)||objectCode(row);
+    const name=text(row.domain_name)||text(row.domainName)||text(row.DomainName)||text(row.name)||objectName(row);
+    if(!code||!name||seen.has(code)) return false;
+    seen.add(code);
+    return matchesQuery(q,code,name,text(row.group_name),text(row.description));
+  });
+
+  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
+    const code=text(row.domain_code)||text(row.domainCode)||text(row.DomainCode)||text(row.code)||objectCode(row);
+    const title=text(row.domain_name)||text(row.domainName)||text(row.DomainName)||text(row.name)||objectName(row);
+    return {
+      id:"fao-domain-"+code,
+      concept:"faostat-domain",
+      title,
+      provider:"FAO",
+      providerId:"fao",
+      indicator:code,
+      unit:"Dataset dimensions vary",
+      frequency:"Dataset-defined",
+      description:text(row.description)||"FAOSTAT statistical domain.",
+      normalized:false,
+      resultType:"dataset",
+      selectable:false,
+      sourceUrl:"https://www.fao.org/faostat/en/#developer-portal"
+    } satisfies SeriesCatalogItem;
+  });
+
+  return {items,total:matched.length,partial:true};
+}
+
+async function comtrade(q:string):Promise<SearchOutcome>{
+  const key=process.env.COMTRADE_API_KEY;
+  if(!key) return {items:[],total:0,partial:true};
+
+  const url=new URL("https://comtradeapi.un.org/public/v1/getMetadata/C/A/HS");
+  url.searchParams.set("subscription-key",key);
+
+  const res=await fetch(url,{
+    headers:{Accept:"application/json"},
+    cache:"no-store",
+    signal:AbortSignal.timeout(18000)
+  });
+  if(!res.ok) throw new Error("HTTP "+res.status);
+
+  const payload:any=await res.json();
+  const rows=flattenObjects(payload);
+  const seen=new Set<string>();
+  const matched=rows.filter((row:any)=>{
+    const code=objectCode(row);
+    const name=objectName(row);
+    if(!code||!name||seen.has(code)) return false;
+    seen.add(code);
+    return matchesQuery(q,code,name,text(row.description),text(row.type));
+  });
+
+  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
+    const code=objectCode(row);
+    const title=objectName(row);
+    return {
+      id:"comtrade-meta-"+code,
+      concept:"comtrade-metadata",
+      title,
+      provider:"UN Comtrade",
+      providerId:"un-comtrade",
+      indicator:code,
+      unit:text(row.unit)||"See Comtrade metadata",
+      frequency:"Annual / monthly",
+      description:text(row.description)||title,
+      normalized:false,
+      resultType:"dataset",
+      selectable:false,
+      sourceUrl:"https://uncomtrade.org/docs/un-comtrade-api/"
+    } satisfies SeriesCatalogItem;
+  });
+
+  return {items,total:matched.length,partial:true};
+}
+
+async function undp(q:string):Promise<SearchOutcome>{
+  const key=process.env.UNDP_API_KEY;
+  if(!key) return {items:[],total:0,partial:true};
+
+  const url=new URL("https://hdrdata.org/api/Metadata/Indicators");
+  url.searchParams.set("apikey",key);
+
+  const res=await fetch(url,{
+    headers:{Accept:"application/json"},
+    cache:"no-store",
+    signal:AbortSignal.timeout(18000)
+  });
+  if(!res.ok) throw new Error("HTTP "+res.status);
+
+  const payload:any=await res.json();
+  const rows=Array.isArray(payload)?payload:flattenObjects(payload);
+  const seen=new Set<string>();
+  const matched=rows.filter((row:any)=>{
+    const code=text(row.indicator)||text(row.indicator_code)||text(row.code)||objectCode(row);
+    const name=text(row.indicator_name)||text(row.name)||text(row.label)||objectName(row);
+    if(!code||!name||seen.has(code)) return false;
+    seen.add(code);
+    return matchesQuery(q,code,name,text(row.description));
+  });
+
+  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
+    const code=text(row.indicator)||text(row.indicator_code)||text(row.code)||objectCode(row);
+    const title=text(row.indicator_name)||text(row.name)||text(row.label)||objectName(row);
+    return {
+      id:"undp-"+code,
+      concept:"undp-indicator",
+      title,
+      provider:"UNDP",
+      providerId:"undp",
+      indicator:code,
+      unit:text(row.unit)||"See UNDP metadata",
+      frequency:"Annual",
+      description:text(row.description)||title,
+      normalized:false,
+      resultType:"series",
+      selectable:false,
+      sourceUrl:"https://hdrdata.org/"
+    } satisfies SeriesCatalogItem;
+  });
+
+  return {items,total:matched.length,...capFrequencyCounts({annual:matched.length})};
+}
+
+async function afdb(q:string):Promise<SearchOutcome>{
+  const url=new URL("https://dataportal.opendataforafrica.org/api/1.0/meta/dataset");
+  if(q.trim()) url.searchParams.set("query",q.trim());
+  url.searchParams.set("pagesize","1000");
+
+  const res=await fetch(url,{
+    headers:{Accept:"application/json","User-Agent":"PublicDataWorkbench/1.0"},
+    next:{revalidate:21600},
+    signal:AbortSignal.timeout(18000)
+  });
+  if(!res.ok) throw new Error("HTTP "+res.status);
+
+  const payload:any=await res.json();
+  const rows=flattenObjects(payload);
+  const seen=new Set<string>();
+  const matched=rows.filter((row:any)=>{
+    const code=text(row.id)||text(row.datasetId)||text(row.dataset_id)||objectCode(row);
+    const name=text(row.name)||text(row.title)||objectName(row);
+    if(!code||!name||seen.has(code)) return false;
+    seen.add(code);
+    return matchesQuery(q,code,name,text(row.description));
+  });
+
+  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
+    const code=text(row.id)||text(row.datasetId)||text(row.dataset_id)||objectCode(row);
+    const title=text(row.name)||text(row.title)||objectName(row);
+    return {
+      id:"afdb-dataset-"+code,
+      concept:"afdb-dataset",
+      title,
+      provider:"AfDB",
+      providerId:"afdb",
+      indicator:code,
+      unit:"Dataset dimensions vary",
+      frequency:text(row.frequency)||"Dataset-defined",
+      description:text(row.description)||title,
+      normalized:false,
+      resultType:"dataset",
+      selectable:false,
+      sourceUrl:"https://dataportal.opendataforafrica.org/"+encodeURIComponent(code)
+    } satisfies SeriesCatalogItem;
+  });
+
+  return {items,total:matched.length,partial:true};
+}
+
+async function unctad(q:string):Promise<SearchOutcome>{
+  const res=await fetch("https://unctadstat.unctad.org/datacentre/",{
+    headers:{Accept:"text/html","User-Agent":"PublicDataWorkbench/1.0"},
+    next:{revalidate:21600},
+    signal:AbortSignal.timeout(18000)
+  });
+  if(!res.ok) throw new Error("HTTP "+res.status);
+
+  const html=await res.text();
+  const rows:{code:string;name:string}[]=[];
+  const regex=/<a[^>]+href=["'][^"']*\/datacentre\/dataviewer\/([^"'?#]+)[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let match:RegExpExecArray|null;
+  const seen=new Set<string>();
+
+  while((match=regex.exec(html))&&rows.length<5000){
+    const code=decodeURIComponent(match[1]).trim();
+    const name=decodeXml(match[2].replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim());
+    if(!code||!name||seen.has(code)) continue;
+    seen.add(code);
+    if(matchesQuery(q,code,name)) rows.push({code,name});
+  }
+
+  const items=rows.slice(0,MAX_PER_SOURCE).map(row=>({
+    id:"unctad-"+row.code,
+    concept:"unctad-table",
+    title:row.name,
+    provider:"UNCTAD",
+    providerId:"unctad",
+    indicator:row.code,
+    unit:"Dataset dimensions vary",
+    frequency:"Dataset-defined",
+    description:"UNCTAD Data Hub table.",
+    normalized:false,
+    resultType:"dataset",
+    selectable:false,
+    sourceUrl:"https://unctadstat.unctad.org/datacentre/dataviewer/"+encodeURIComponent(row.code)
+  } satisfies SeriesCatalogItem));
+
+  return {items,total:rows.length,partial:true};
 }
 
 async function fred(q:string):Promise<SearchOutcome>{
@@ -452,6 +772,7 @@ function dataflowsFromJson(payload:any){
 type SdmxConfig={id:string;name:string;url:string;docs:string};
 
 const sdmxProviders:SdmxConfig[]=[
+  {id:"imf",name:"IMF",url:"https://api.imf.org/external/sdmx/3.0/structure/dataflow/all/all/+?detail=allstubs&references=none",docs:"https://data.imf.org/"},
   {id:"ilo",name:"ILO",url:"https://sdmx.ilo.org/rest/dataflow/all/all/latest?detail=allstubs&references=none",docs:"https://sdmx.ilo.org/"},
   {id:"oecd",name:"OECD",url:"https://sdmx.oecd.org/public/rest/dataflow/all?detail=allstubs&references=none",docs:"https://data-explorer.oecd.org/"},
   {id:"unicef",name:"UNICEF",url:"https://sdmx.data.unicef.org/ws/public/sdmxapi/rest/dataflow/all/all/latest/?format=sdmx-json&detail=allstubs&references=none",docs:"https://sdmx.data.unicef.org/"},
@@ -500,7 +821,7 @@ async function sdmxDataflows(config:SdmxConfig,q:string):Promise<SearchOutcome>{
     sourceUrl:config.docs
   } satisfies SeriesCatalogItem));
 
-  return {items,total:matched.length};
+  return {items,total:matched.length,partial:true};
 }
 
 async function eia(q:string):Promise<SearchOutcome>{
@@ -545,6 +866,13 @@ type SearchFn=(q:string)=>Promise<SearchOutcome>;
 
 const dynamicSearchers:Record<string,SearchFn>={
   "world-bank":worldBank,
+  unesco,
+  adb,
+  fao,
+  "un-comtrade":comtrade,
+  undp,
+  afdb,
+  unctad,
   fred,
   sdg,
   "un-population":unPopulation,
@@ -581,7 +909,7 @@ export async function federatedCatalogSearch(q:string,providerIds:string[]):Prom
     });
   }
 
-  const defaultDynamic=["world-bank","fred","sdg","unhcr","wto","un-population","eia"];
+  const defaultDynamic=Object.keys(dynamicSearchers);
   const ids=includeAll
     ? (q.trim()?Object.keys(dynamicSearchers):defaultDynamic)
     : [...requested].filter(id=>dynamicSearchers[id]);
@@ -605,6 +933,7 @@ export async function federatedCatalogSearch(q:string,providerIds:string[]):Prom
       providerId:entry.providerId,
       state:entry.error?"error":"ok",
       ...statusCount(entry.outcome.total),
+      partial:entry.outcome.partial,
       frequencyCounts:entry.outcome.frequencyCounts,
       frequencyCapped:entry.outcome.frequencyCapped,
       message:entry.error||undefined
@@ -654,6 +983,7 @@ export async function providerCatalogueCounts():Promise<ProviderSearchStatus[]>{
       return {
         providerId,
         total:outcome.total,
+        partial:outcome.partial,
         frequencyCounts:outcome.frequencyCounts,
         frequencyCapped:outcome.frequencyCapped,
         error:null as string|null
@@ -662,6 +992,7 @@ export async function providerCatalogueCounts():Promise<ProviderSearchStatus[]>{
       return {
         providerId,
         total:0,
+        partial:undefined,
         frequencyCounts:undefined,
         frequencyCapped:undefined,
         error:error instanceof Error?error.message:"Count failed"
@@ -674,6 +1005,7 @@ export async function providerCatalogueCounts():Promise<ProviderSearchStatus[]>{
       providerId:entry.providerId,
       state:entry.error?"error":"ok",
       ...statusCount(entry.total),
+      partial:entry.partial,
       frequencyCounts:entry.frequencyCounts,
       frequencyCapped:entry.frequencyCapped,
       message:entry.error||undefined
