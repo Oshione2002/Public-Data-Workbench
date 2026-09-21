@@ -95,7 +95,7 @@ img,svg{max-width:100%;display:block}
 .cartItem{display:flex;justify-content:space-between;gap:14px;padding:13px 0;border-bottom:1px solid var(--line)}
 .cartItem strong{display:block;font-size:14px}
 .cartItem small{color:var(--muted)}
-.cartFooter{padding:15px;display:flex;justify-content:space-between;gap:12px;align-items:center}
+.cartFooter{position:sticky;bottom:0;z-index:3;padding:15px;display:flex;justify-content:space-between;gap:12px;align-items:center;background:#fff;border-top:1px solid var(--line)}
 .inspectorBackdrop{position:fixed;inset:62px 0 0;background:rgba(19,30,36,.28);z-index:75;display:none}
 .inspectorBackdrop.open{display:block}
 .inspector{position:absolute;right:0;top:0;height:100%;width:min(440px,94vw);background:#fff;border-left:1px solid var(--lineDark);padding:24px;overflow:auto}
