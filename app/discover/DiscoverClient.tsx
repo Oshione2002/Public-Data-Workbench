@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useCart } from "@/components/AppProvider";
 import type { SeriesCatalogItem } from "@/lib/catalog";
 
+type FrequencyId="annual"|"semiannual"|"quarterly"|"monthly"|"weekly"|"daily"|"hourly";
+
 type ProviderInfo={
   id:string;
   name:string;
@@ -13,6 +15,7 @@ type ProviderInfo={
   docs:string;
   queryable:boolean;
   configured:boolean;
+  frequencies:FrequencyId[];
 };
 
 type ProviderSearchStatus={
@@ -23,6 +26,33 @@ type ProviderSearchStatus={
   message?:string;
 };
 
+const frequencyOptions:{id:FrequencyId;label:string}[]=[
+  {id:"annual",label:"Annual"},
+  {id:"semiannual",label:"Semiannual"},
+  {id:"quarterly",label:"Quarterly"},
+  {id:"monthly",label:"Monthly"},
+  {id:"weekly",label:"Weekly"},
+  {id:"daily",label:"Daily"},
+  {id:"hourly",label:"Hourly"}
+];
+
+function inferFrequencies(value:string):FrequencyId[]{
+  const v=value.toLowerCase();
+  if(!v||v.includes("dataset-defined")||v.includes("provider-defined")||v==="various") return [];
+  const out:FrequencyId[]=[];
+  const add=(id:FrequencyId)=>{if(!out.includes(id)) out.push(id);};
+
+  if(/\bannual\b|\byearly\b|\byear\b|(^|[^a-z])a([^a-z]|$)/.test(v)) add("annual");
+  if(/semi[- ]?annual|half[- ]?year|biannual/.test(v)) add("semiannual");
+  if(/\bquarterly\b|\bquarter\b|(^|[^a-z])q([^a-z]|$)/.test(v)) add("quarterly");
+  if(/\bmonthly\b|\bmonth\b|(^|[^a-z])m([^a-z]|$)/.test(v)) add("monthly");
+  if(/\bweekly\b|\bweek\b|(^|[^a-z])w([^a-z]|$)/.test(v)) add("weekly");
+  if(/\bdaily\b|\bday\b|business day|(^|[^a-z])d([^a-z]|$)/.test(v)) add("daily");
+  if(/\bhourly\b|\bhour\b|(^|[^a-z])h([^a-z]|$)/.test(v)) add("hourly");
+
+  return out;
+}
+
 export default function DiscoverClient({initialQuery}:{initialQuery:string}){
   const [query,setQuery]=useState(initialQuery);
   const [results,setResults]=useState<SeriesCatalogItem[]>([]);
@@ -31,6 +61,7 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
   const [loading,setLoading]=useState(true);
   const [searchQuery,setSearchQuery]=useState(initialQuery);
   const [providerFilters,setProviderFilters]=useState<string[]>([]);
+  const [frequencyFilters,setFrequencyFilters]=useState<FrequencyId[]>(["annual"]);
   const [filtersOpen,setFiltersOpen]=useState(false);
   const [cartOpen,setCartOpen]=useState(false);
   const [inspected,setInspected]=useState<SeriesCatalogItem|null>(null);
@@ -78,13 +109,22 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
     return map;
   },[allProviders]);
 
-  const visible=results;
+  function itemMatchesFrequency(item:SeriesCatalogItem,frequency:FrequencyId){
+    const known=inferFrequencies(item.frequency);
+    if(known.length) return known.includes(frequency);
+    return providerMap.get(item.providerId)?.frequencies?.includes(frequency)??false;
+  }
+
+  const visible=useMemo(()=>{
+    if(frequencyFilters.length===0) return results;
+    return results.filter(item=>frequencyFilters.some(frequency=>itemMatchesFrequency(item,frequency)));
+  },[results,frequencyFilters,providerMap]);
 
   const resultCounts=useMemo(()=>{
     const counts=new Map<string,number>();
-    results.forEach(item=>counts.set(item.providerId,(counts.get(item.providerId)||0)+1));
+    visible.forEach(item=>counts.set(item.providerId,(counts.get(item.providerId)||0)+1));
     return counts;
-  },[results]);
+  },[visible]);
 
   const statusMap=useMemo(()=>{
     const map=new Map<string,ProviderSearchStatus>();
@@ -99,14 +139,59 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
       .filter((p):p is ProviderInfo=>Boolean(p));
   },[providerFilters,providerMap]);
 
+  const activeProviderSet=useMemo(()=>{
+    if(providerFilters.length===0) return allProviders;
+    return providerFilters.map(id=>providerMap.get(id)).filter((p):p is ProviderInfo=>Boolean(p));
+  },[providerFilters,providerMap,allProviders]);
+
+  const availableFrequencies=useMemo(()=>{
+    const set=new Set<FrequencyId>();
+    activeProviderSet.forEach(provider=>(provider.frequencies||[]).forEach(f=>set.add(f)));
+    return set;
+  },[activeProviderSet]);
+
+  const frequencyCounts=useMemo(()=>{
+    const counts=new Map<FrequencyId,number>();
+    for(const option of frequencyOptions){
+      counts.set(option.id,results.filter(item=>itemMatchesFrequency(item,option.id)).length);
+    }
+    return counts;
+  },[results,providerMap]);
+
   function toggleProvider(id:string){
     setProviderFilters(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
+  }
+
+  function toggleFrequency(id:FrequencyId){
+    setFrequencyFilters(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
   }
 
   function providerStatus(p:ProviderInfo){
     if(p.mode==="keyed") return p.configured?"API key configured":"API key required";
     if(p.queryable) return "API registered";
     return "Portal / bulk source";
+  }
+
+  function providerBadge(provider:ProviderInfo){
+    if(searchQuery.trim()){
+      if(loading) return "…";
+      const status=statusMap.get(provider.id);
+      if(status?.state==="error") return "!";
+      if(status?.state==="skipped") return "—";
+      const count=resultCounts.get(provider.id)||0;
+      return status?.capped?count+"+":String(count);
+    }
+    if(providerFilters.includes(provider.id)) return String(resultCounts.get(provider.id)||0);
+    return provider.mode==="keyed"?(provider.configured?"Ready":"Key"):provider.queryable?"API":"Bulk";
+  }
+
+  function providerBadgeTitle(provider:ProviderInfo){
+    if(!searchQuery.trim()) return providerStatus(provider);
+    const status=statusMap.get(provider.id);
+    if(status?.state==="error") return status.message||"Provider search failed";
+    if(status?.state==="skipped") return status.message||"Provider catalogue is not searchable yet";
+    const count=resultCounts.get(provider.id)||0;
+    return (status?.capped?"At least ":"")+count+" matching result"+(count===1?"":"s")+" after the active frequency filter";
   }
 
   return <div className="discoverShell">
@@ -131,16 +216,8 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
                     onChange={()=>toggleProvider(provider.id)}
                   />
                   <span>{provider.shortName}</span>
-                  <small title={searchQuery.trim()?("Matching variables from "+provider.shortName):providerStatus(provider)}>
-                    {loading&&searchQuery.trim()
-                      ?"…"
-                      :searchQuery.trim()
-                        ?statusMap.has(provider.id)
-                          ?((statusMap.get(provider.id)?.capped?"20+ ":String(statusMap.get(provider.id)?.count??0))+"")
-                          :"—"
-                        :providerFilters.includes(provider.id)
-                          ?String(resultCounts.get(provider.id)||0)
-                          :provider.mode==="keyed"?(provider.configured?"Ready":"Key"):provider.queryable?"API":"Bulk"}
+                  <small className={searchQuery.trim()?"countBadge":""} title={providerBadgeTitle(provider)}>
+                    {providerBadge(provider)}
                   </small>
                 </label>
               )}
@@ -148,10 +225,31 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
         </div>
 
         <div className="filterGroup">
-          <h3>Frequency</h3>
-          <label className="check"><input type="checkbox" defaultChecked/>Annual</label>
-          <label className="check"><input type="checkbox" disabled/>Quarterly</label>
-          <label className="check"><input type="checkbox" disabled/>Monthly</label>
+          <div className="filterGroupHead">
+            <h3>Frequency</h3>
+            {frequencyFilters.length>0&&<button className="filterClear" type="button" onClick={()=>setFrequencyFilters([])}>All</button>}
+          </div>
+
+          <div className="frequencyFilterList">
+            {frequencyOptions.map(option=>{
+              const supported=availableFrequencies.has(option.id);
+              const count=frequencyCounts.get(option.id)||0;
+              return <label className={"check frequencyCheck "+(!supported?"unsupported":"")} key={option.id}>
+                <input
+                  type="checkbox"
+                  checked={frequencyFilters.includes(option.id)}
+                  disabled={!supported}
+                  onChange={()=>toggleFrequency(option.id)}
+                />
+                <span>{option.label}</span>
+                <small>{searchQuery.trim()?String(count):supported?"":"—"}</small>
+              </label>;
+            })}
+          </div>
+
+          <p className="filterHint">
+            Multiple frequencies can be selected. With no frequency selected, all supported frequencies are shown.
+          </p>
         </div>
 
         <div>
@@ -169,9 +267,9 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
           <div className="sectionCopy">
             {loading
               ?"Searching catalogue…"
-              : providerFilters.length
-                ? visible.length+" indexed series from "+providerFilters.length+" selected source"+(providerFilters.length===1?"":"s")
-                : results.length+" indexed series · "+allProviders.length+" data sources registered"}
+              :providerFilters.length
+                ?visible.length+" matching result"+(visible.length===1?"":"s")+" from "+providerFilters.length+" selected source"+(providerFilters.length===1?"":"s")
+                :visible.length+" matching result"+(visible.length===1?"":"s")+" · "+allProviders.length+" data sources registered"}
           </div>
         </div>
 
@@ -244,9 +342,11 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
 
             {!visible.length&&
               <div className="workspaceEmpty">
-                {providerFilters.length
-                  ?"No indexed indicator is available for the selected source yet. The source is registered and can still be inspected from Source details while its indicator catalogue is being normalized."
-                  :"No catalogue match. Try a broader topic such as GDP, inflation, trade, population or unemployment."}
+                {frequencyFilters.length
+                  ?"No result matches the selected source and frequency combination. Try another frequency or choose All."
+                  :providerFilters.length
+                    ?"No indexed indicator is available for the selected source yet. The source is registered and can still be inspected from Source details while its indicator catalogue is being normalized."
+                    :"No catalogue match. Try a broader topic such as GDP, inflation, trade, population or unemployment."}
               </div>
             }
           </div>
