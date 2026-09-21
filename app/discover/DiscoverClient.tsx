@@ -238,7 +238,7 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
                 <input
                   type="checkbox"
                   checked={frequencyFilters.includes(option.id)}
-                  disabled={!supported}
+                  disabled={!supported && !frequencyFilters.includes(option.id)}
                   onChange={()=>toggleFrequency(option.id)}
                 />
                 <span>{option.label}</span>
