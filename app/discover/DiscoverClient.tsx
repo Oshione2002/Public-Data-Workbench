@@ -15,11 +15,20 @@ type ProviderInfo={
   configured:boolean;
 };
 
+type ProviderSearchStatus={
+  providerId:string;
+  state:"ok"|"skipped"|"error";
+  count:number;
+  message?:string;
+};
+
 export default function DiscoverClient({initialQuery}:{initialQuery:string}){
   const [query,setQuery]=useState(initialQuery);
   const [results,setResults]=useState<SeriesCatalogItem[]>([]);
   const [allProviders,setAllProviders]=useState<ProviderInfo[]>([]);
+  const [sourceStatus,setSourceStatus]=useState<ProviderSearchStatus[]>([]);
   const [loading,setLoading]=useState(true);
+  const [searchQuery,setSearchQuery]=useState(initialQuery);
   const [providerFilters,setProviderFilters]=useState<string[]>([]);
   const [filtersOpen,setFiltersOpen]=useState(false);
   const [cartOpen,setCartOpen]=useState(false);
@@ -29,22 +38,38 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
   useEffect(()=>{ if(location.hash==="#cart") setCartOpen(true); },[]);
 
   useEffect(()=>{
+    const timer=setTimeout(()=>setSearchQuery(query),350);
+    return ()=>clearTimeout(timer);
+  },[query]);
+
+  useEffect(()=>{
+    const controller=new AbortController();
+    fetch("/api/providers",{signal:controller.signal})
+      .then(r=>r.json())
+      .then(data=>setAllProviders(Array.isArray(data.providers)?data.providers:[]))
+      .catch(()=>{});
+    return ()=>controller.abort();
+  },[]);
+
+  useEffect(()=>{
     const controller=new AbortController();
     setLoading(true);
 
-    Promise.all([
-      fetch("/api/catalog?q="+encodeURIComponent(query),{signal:controller.signal}).then(r=>r.json()),
-      fetch("/api/providers",{signal:controller.signal}).then(r=>r.json())
-    ])
-      .then(([catalogData,providerData])=>{
-        setResults(Array.isArray(catalogData.results)?catalogData.results:[]);
-        setAllProviders(Array.isArray(providerData.providers)?providerData.providers:[]);
+    const params=new URLSearchParams();
+    if(searchQuery.trim()) params.set("q",searchQuery.trim());
+    if(providerFilters.length) params.set("providers",providerFilters.join(","));
+
+    fetch("/api/catalog?"+params.toString(),{signal:controller.signal})
+      .then(r=>r.json())
+      .then(data=>{
+        setResults(Array.isArray(data.results)?data.results:[]);
+        setSourceStatus(Array.isArray(data.sourceStatus)?data.sourceStatus:[]);
       })
       .catch(()=>{})
       .finally(()=>setLoading(false));
 
     return ()=>controller.abort();
-  },[query]);
+  },[searchQuery,providerFilters]);
 
   const providerMap=useMemo(()=>{
     const map=new Map<string,ProviderInfo>();
@@ -52,10 +77,19 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
     return map;
   },[allProviders]);
 
-  const visible=useMemo(()=>{
-    if(providerFilters.length===0) return results;
-    return results.filter(item=>providerFilters.includes(item.providerId));
-  },[results,providerFilters]);
+  const visible=results;
+
+  const resultCounts=useMemo(()=>{
+    const counts=new Map<string,number>();
+    results.forEach(item=>counts.set(item.providerId,(counts.get(item.providerId)||0)+1));
+    return counts;
+  },[results]);
+
+  const statusMap=useMemo(()=>{
+    const map=new Map<string,ProviderSearchStatus>();
+    sourceStatus.forEach(status=>map.set(status.providerId,status));
+    return map;
+  },[sourceStatus]);
 
   const selectedProviderCards=useMemo(()=>{
     if(providerFilters.length===0) return [];
@@ -97,7 +131,9 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
                   />
                   <span>{provider.shortName}</span>
                   <small title={providerStatus(provider)}>
-                    {provider.mode==="keyed"?(provider.configured?"Ready":"Key"):provider.queryable?"API":"Bulk"}
+                    {providerFilters.includes(provider.id)
+                      ? String(resultCounts.get(provider.id)||0)
+                      : provider.mode==="keyed"?(provider.configured?"Ready":"Key"):provider.queryable?"API":"Bulk"}
                   </small>
                 </label>
               )}
@@ -151,7 +187,11 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
                 <span>{provider.description}</span>
               </div>
               <div className="providerSelectionMeta">
-                <span>{providerStatus(provider)}</span>
+                <span>
+                  {statusMap.get(provider.id)?.state==="error"
+                    ?"Search unavailable"
+                    :(resultCounts.get(provider.id)||0)+" result"+((resultCounts.get(provider.id)||0)===1?"":"s")}
+                </span>
                 <a className="button compact" href={"/sources#"+provider.id}>Source details</a>
               </div>
             </article>
@@ -174,17 +214,23 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
                   </div>
                 </div>
 
-                <div className="coverage">{item.normalized?"Live normalized adapter":"Provider catalogue"}</div>
+                <div className="coverage">
+                  {item.resultType==="dataset"
+                    ?"Dataset catalogue"
+                    :item.normalized?"Live normalized adapter":"Live provider catalogue"}
+                </div>
 
                 <div className="resultActions">
                   <button className="button compact" type="button" onClick={()=>setInspected(item)}>Details</button>
-                  <button
-                    className={"button compact "+(cart.has(item.id)?"danger":"")}
-                    type="button"
-                    onClick={()=>cart.toggle(item)}
-                  >
-                    {cart.has(item.id)?"Remove":"Add"}
-                  </button>
+                  {item.selectable===false
+                    ? <a className="button compact" href={"/sources#"+item.providerId}>Source</a>
+                    : <button
+                        className={"button compact "+(cart.has(item.id)?"danger":"")}
+                        type="button"
+                        onClick={()=>cart.toggle(item)}
+                      >
+                        {cart.has(item.id)?"Remove":"Add"}
+                      </button>}
                 </div>
               </article>
             )}
@@ -222,9 +268,12 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
           <div className="metaRow"><dt>Unit</dt><dd>{inspected.unit}</dd></div>
           <div className="metaRow"><dt>Frequency</dt><dd>{inspected.frequency}</dd></div>
           <div className="metaRow"><dt>Concept</dt><dd>{inspected.concept}</dd></div>
-          <div className="metaRow"><dt>Retrieval</dt><dd>{inspected.normalized?"Available directly in the workbench":"Provider metadata is registered; normalization is still required."}</dd></div>
+          <div className="metaRow"><dt>Type</dt><dd>{inspected.resultType==="dataset"?"Dataset / dataflow":"Statistical series"}</dd></div>
+          <div className="metaRow"><dt>Retrieval</dt><dd>{inspected.normalized?"Available directly in the workbench":"Searchable provider metadata; workspace normalization is still required for this result."}</dd></div>
         </dl>
-        <button className={"button primary "+(cart.has(inspected.id)?"danger":"")} type="button" onClick={()=>cart.toggle(inspected)}>{cart.has(inspected.id)?"Remove series":"Add series"}</button>
+        {inspected.selectable===false
+          ? <a className="button primary" href={"/sources#"+inspected.providerId}>Open source details</a>
+          : <button className={"button primary "+(cart.has(inspected.id)?"danger":"")} type="button" onClick={()=>cart.toggle(inspected)}>{cart.has(inspected.id)?"Remove series":"Add series"}</button>}
       </aside>}
     </div>
   </div>;
