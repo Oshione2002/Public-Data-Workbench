@@ -261,3 +261,10 @@ img,svg{max-width:100%;display:block}
   .providerSelectionCard{grid-template-columns:1fr}
   .providerSelectionMeta{justify-content:space-between}
 }
+
+.sourceCheck small.countBadge{min-width:30px;text-align:center;font-variant-numeric:tabular-nums;font-weight:700;color:var(--ink)}
+.frequencyFilterList{display:grid;gap:1px}
+.frequencyCheck{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:8px}
+.frequencyCheck small{min-width:24px;text-align:right;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.frequencyCheck.unsupported{color:#98a1a8}
+.filterHint{margin:9px 0 0;color:var(--muted);font-size:11px;line-height:1.35}
