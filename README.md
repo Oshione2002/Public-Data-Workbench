@@ -15,7 +15,7 @@ Public Data Workbench is a responsive research-data application for finding, com
 - **Discover** — search the local series catalogue, inspect definitions and add/remove series from a persistent Data Cart.
 - **Sources** — provider registry plus a controlled API console for verified upstream API bases.
 - **Resolver** — compare coverage and overlapping observations before combining incomplete series.
-- **Workspace** — retrieve selected live series, merge by year, chart, transform and export.
+- **Workspace** — retrieve selected live series for multiple countries, merge by country and period, chart, transform and export.
 - **Exports** — CSV data and JSON metadata with source codes, retrieval dates and source URLs where available.
 
 ## Provider registry
@@ -33,10 +33,10 @@ The registry deliberately distinguishes:
 The current common time-series response format is implemented for:
 
 - World Bank Indicators API
-- IMF DataMapper API
+- IMF Data Portal SDMX 3.0 API (WEO series)
 - FRED when a server-side key is configured
 
-Other verified providers remain accessible through the provider API console while provider-specific normalization is added.
+SDMX providers expose dataflows as dataset containers. Their dimensions must be resolved before a concrete series can be added to the Data Cart.
 
 ## Environment variables
 
@@ -48,6 +48,7 @@ EIA_API_KEY=
 WTO_API_KEY=
 COMTRADE_API_KEY=
 UN_POPULATION_TOKEN=
+UNDP_API_KEY=
 ```
 
 Never place keys in client-side code.
@@ -70,13 +71,21 @@ npm start
 
 ## API routes
 
-- `GET /api/catalog?q=inflation`
+- `GET /api/catalog?q=inflation&page=1&pageSize=20`
+- `GET /api/catalog?providers=world-bank&frequencies=annual&page=2&pageSize=100`
 - `GET /api/providers`
+- `GET /api/source-counts`
+- `GET /api/datasets/{provider}/{dataset}?agency={agency}&version={version}`
+- `POST /api/datasets/resolve`
 - `GET /api/data?provider=world-bank&indicator=FP.CPI.TOTL.ZG&country=NGA&start=1990&end=2025`
 - `GET /api/data?provider=imf&indicator=PCPIPCH&country=NGA&start=1990&end=2025`
 - `GET /api/provider/{provider}?path={relative-upstream-path}`
 
 The provider proxy rejects arbitrary hosts and path traversal, caps large responses, applies keys only on the server, and uses only hosts configured in `lib/providers.ts`.
+
+Catalogue responses include `page`, `pageSize`, `total`, `totalPages`, `results`, provider-specific status and frequency facets. Page sizes are 20, 50, 100 and 250. Discover's “All” mode requests 250-row chunks progressively rather than returning an unbounded browser payload.
+
+Opening an SDMX dataset loads its DSD and codelists. Resolving every non-country dimension produces a series key that can be added to the Data Cart. Workspace supplies the country dimension and rejects duplicate periods rather than silently aggregating unresolved observations.
 
 ## Data integrity
 
