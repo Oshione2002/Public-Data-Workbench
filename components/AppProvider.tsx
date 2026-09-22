@@ -12,7 +12,8 @@ type CartContextValue = {
 };
 
 const CartContext = createContext<CartContextValue | null>(null);
-const KEY = "pdw-cart-v3";
+const KEY = "pdw-cart-v4";
+const LEGACY_KEY = "pdw-cart-v3";
 
 export default function AppProvider({children}:{children:React.ReactNode}){
   const [items,setItems]=useState<SeriesCatalogItem[]>([]);
@@ -20,10 +21,10 @@ export default function AppProvider({children}:{children:React.ReactNode}){
 
   useEffect(()=>{
     try{
-      const raw=localStorage.getItem(KEY);
+      const raw=localStorage.getItem(KEY)||localStorage.getItem(LEGACY_KEY);
       if(raw){
         const parsed=JSON.parse(raw);
-        if(Array.isArray(parsed)) setItems(parsed);
+        if(Array.isArray(parsed)) setItems(parsed.filter(item=>item&&item.resultType!=="dataset"&&item.selectable!==false));
       }
     }catch{}
     setReady(true);

@@ -15,6 +15,10 @@ export type ProviderSearchStatus={
 type SearchResponse={
   results:SeriesCatalogItem[];
   status:ProviderSearchStatus[];
+  total:number;
+  page:number;
+  pageSize:number;
+  totalPages:number;
 };
 
 type SearchOutcome={
@@ -25,7 +29,6 @@ type SearchOutcome={
   frequencyCapped?:Partial<Record<ProviderFrequency,boolean>>;
 };
 
-const MAX_PER_SOURCE=20;
 const BADGE_CAP=1000;
 
 function text(value:unknown){
@@ -72,7 +75,7 @@ function matchesQuery(q:string,...values:string[]){
   return tokens.every(token=>hay.includes(token));
 }
 
-function dedupe(items:SeriesCatalogItem[]){
+export function sortAndDedupe(items:SeriesCatalogItem[]){
   const seen=new Set<string>();
   return items
     .filter(item=>{
@@ -192,7 +195,7 @@ async function worldBank(q:string):Promise<SearchOutcome>{
 
   const res=await fetch(url,{
     next:{revalidate:86400},
-    signal:AbortSignal.timeout(18000)
+    signal:AbortSignal.timeout(30000)
   });
   if(!res.ok) throw new Error("HTTP "+res.status);
 
@@ -207,7 +210,7 @@ async function worldBank(q:string):Promise<SearchOutcome>{
     return code&&name&&matchesQuery(q,code,name,note,topics);
   });
 
-  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>({
+  const items=matched.map((row:any)=>({
     id:"wb-"+text(row.id),
     concept:"world-bank-indicator",
     title:text(row.name)||text(row.id),
@@ -220,6 +223,8 @@ async function worldBank(q:string):Promise<SearchOutcome>{
     normalized:true,
     resultType:"series",
     selectable:true,
+    geographyMode:"country",
+    retrieval:"direct",
     sourceUrl:"https://data.worldbank.org/indicator/"+encodeURIComponent(text(row.id))
   } satisfies SeriesCatalogItem));
 
@@ -253,7 +258,7 @@ async function ilo(q:string):Promise<SearchOutcome>{
     )
   );
 
-  const items=matched.slice(0,MAX_PER_SOURCE).map(row=>{
+  const items=matched.map(row=>{
     const code=row["indicator"]||row["id"]||"";
     const fileId=row["id"]||code;
     const frequency=row["freq.label"]||(
@@ -297,7 +302,7 @@ async function unesco(q:string):Promise<SearchOutcome>{
   const res=await fetch(url,{
     headers:{Accept:"application/json"},
     next:{revalidate:86400},
-    signal:AbortSignal.timeout(18000)
+    signal:AbortSignal.timeout(30000)
   });
   if(!res.ok) throw new Error("HTTP "+res.status);
 
@@ -310,7 +315,7 @@ async function unesco(q:string):Promise<SearchOutcome>{
     return code&&name&&matchesQuery(q,code,name,theme,text(row.description));
   });
 
-  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
+  const items=matched.map((row:any)=>{
     const code=text(row.indicatorCode)||text(row.code)||objectCode(row);
     const title=text(row.indicatorName)||text(row.name)||text(row.label)||objectName(row);
     return {
@@ -338,7 +343,7 @@ async function adb(q:string):Promise<SearchOutcome>{
   const res=await fetch(url,{
     headers:{Accept:"application/json"},
     next:{revalidate:86400},
-    signal:AbortSignal.timeout(18000)
+    signal:AbortSignal.timeout(30000)
   });
   if(!res.ok) throw new Error("HTTP "+res.status);
 
@@ -353,7 +358,7 @@ async function adb(q:string):Promise<SearchOutcome>{
     return matchesQuery(q,code,name,text(row.description));
   });
 
-  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
+  const items=matched.map((row:any)=>{
     const code=objectCode(row);
     const title=objectName(row);
     return {
@@ -396,7 +401,7 @@ async function fao(q:string):Promise<SearchOutcome>{
     return matchesQuery(q,code,name,text(row.group_name),text(row.description));
   });
 
-  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
+  const items=matched.map((row:any)=>{
     const code=text(row.domain_code)||text(row.domainCode)||text(row.DomainCode)||text(row.code)||objectCode(row);
     const title=text(row.domain_name)||text(row.domainName)||text(row.DomainName)||text(row.name)||objectName(row);
     return {
@@ -444,7 +449,7 @@ async function comtrade(q:string):Promise<SearchOutcome>{
     return matchesQuery(q,code,name,text(row.description),text(row.type));
   });
 
-  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
+  const items=matched.map((row:any)=>{
     const code=objectCode(row);
     const title=objectName(row);
     return {
@@ -492,7 +497,7 @@ async function undp(q:string):Promise<SearchOutcome>{
     return matchesQuery(q,code,name,text(row.description));
   });
 
-  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
+  const items=matched.map((row:any)=>{
     const code=text(row.indicator)||text(row.indicator_code)||text(row.code)||objectCode(row);
     const title=text(row.indicator_name)||text(row.name)||text(row.label)||objectName(row);
     return {
@@ -538,7 +543,7 @@ async function afdb(q:string):Promise<SearchOutcome>{
     return matchesQuery(q,code,name,text(row.description));
   });
 
-  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
+  const items=matched.map((row:any)=>{
     const code=text(row.id)||text(row.datasetId)||text(row.dataset_id)||objectCode(row);
     const title=text(row.name)||text(row.title)||objectName(row);
     return {
@@ -583,7 +588,7 @@ async function unctad(q:string):Promise<SearchOutcome>{
     if(matchesQuery(q,code,name)) rows.push({code,name});
   }
 
-  const items=rows.slice(0,MAX_PER_SOURCE).map(row=>({
+  const items=rows.map(row=>({
     id:"unctad-"+row.code,
     concept:"unctad-table",
     title:row.name,
@@ -599,6 +604,7 @@ async function unctad(q:string):Promise<SearchOutcome>{
     sourceUrl:"https://unctadstat.unctad.org/datacentre/dataviewer/"+encodeURIComponent(row.code)
   } satisfies SeriesCatalogItem));
 
+  if(!rows.length) throw new Error("UNCTAD portal is reachable, but it no longer exposes catalogue entries in server-rendered HTML.");
   return {items,total:rows.length,partial:true};
 }
 
@@ -610,15 +616,16 @@ async function fred(q:string):Promise<SearchOutcome>{
   url.searchParams.set("api_key",key);
   url.searchParams.set("file_type","json");
   url.searchParams.set("search_text",q.trim()||"economic");
-  url.searchParams.set("limit",String(MAX_PER_SOURCE));
-  url.searchParams.set("order_by","search_rank");
+  url.searchParams.set("limit","1000");
+  url.searchParams.set("order_by","title");
+  url.searchParams.set("sort_order","asc");
 
-  const res=await fetch(url,{cache:"no-store",signal:AbortSignal.timeout(9000)});
+  const res=await fetch(url,{cache:"no-store",signal:AbortSignal.timeout(20000)});
   if(!res.ok) throw new Error("HTTP "+res.status);
 
   const payload:any=await res.json();
   const rows=Array.isArray(payload?.seriess)?payload.seriess:[];
-  const items=rows.slice(0,MAX_PER_SOURCE).map((row:any)=>({
+  const items=rows.map((row:any)=>({
     id:"fred-"+text(row.id),
     concept:"fred-series",
     title:text(row.title)||text(row.id),
@@ -631,6 +638,9 @@ async function fred(q:string):Promise<SearchOutcome>{
     normalized:true,
     resultType:"series",
     selectable:true,
+    geographyMode:"fixed",
+    geographyCode:"FRED",
+    retrieval:"direct",
     sourceUrl:"https://fred.stlouisfed.org/series/"+encodeURIComponent(text(row.id))
   } satisfies SeriesCatalogItem));
 
@@ -650,6 +660,7 @@ async function fred(q:string):Promise<SearchOutcome>{
   return {
     items,
     total:Number.isFinite(total)?total:rows.length,
+    partial:Number.isFinite(total)?total>rows.length:true,
     ...capFrequencyCounts(frequencyCounts)
   };
 }
@@ -669,7 +680,7 @@ async function sdg(q:string):Promise<SearchOutcome>{
     return code&&name&&matchesQuery(q,code,name,JSON.stringify(row?.indicator||""));
   });
 
-  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
+  const items=matched.map((row:any)=>{
     const title=objectName(row);
     const code=objectCode(row);
     return {
@@ -684,7 +695,9 @@ async function sdg(q:string):Promise<SearchOutcome>{
       description:title,
       normalized:true,
       resultType:"series",
-      selectable:true,
+      selectable:false,
+      geographyMode:"country",
+      retrieval:"unsupported",
       sourceUrl:"https://unstats.un.org/SDGAPI/v1/sdg/Series/"+encodeURIComponent(code)
     } satisfies SeriesCatalogItem;
   });
@@ -714,7 +727,7 @@ async function unPopulation(q:string):Promise<SearchOutcome>{
     return code&&name&&matchesQuery(q,code,name,text(row?.description));
   });
 
-  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
+  const items=matched.map((row:any)=>{
     const code=objectCode(row);
     const title=objectName(row);
     return {
@@ -756,7 +769,7 @@ async function wto(q:string):Promise<SearchOutcome>{
     return code&&name&&matchesQuery(q,code,name,text(row?.description));
   });
 
-  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
+  const items=matched.map((row:any)=>{
     const code=objectCode(row);
     const title=objectName(row);
     return {
@@ -772,6 +785,8 @@ async function wto(q:string):Promise<SearchOutcome>{
       normalized:true,
       resultType:"series",
       selectable:true,
+      geographyMode:"country",
+      retrieval:"direct",
       sourceUrl:"https://stats.wto.org/"
     } satisfies SeriesCatalogItem;
   });
@@ -796,7 +811,7 @@ const unhcrSeries=[
 
 async function unhcr(q:string):Promise<SearchOutcome>{
   const matched=unhcrSeries.filter(([code,title])=>matchesQuery(q,code,title,"displacement refugee asylum stateless population"));
-  const items=matched.slice(0,MAX_PER_SOURCE).map(([code,title,unit])=>({
+  const items=matched.map(([code,title,unit])=>({
     id:"unhcr-"+code,
     concept:"forced-displacement",
     title,
@@ -808,7 +823,9 @@ async function unhcr(q:string):Promise<SearchOutcome>{
     description:"UNHCR Refugee Population Statistics: "+title.toLowerCase()+".",
     normalized:true,
     resultType:"series",
-    selectable:true,
+    selectable:false,
+    geographyMode:"country",
+    retrieval:"unsupported",
     sourceUrl:"https://api.unhcr.org/docs/refugee-statistics.html"
   } satisfies SeriesCatalogItem));
 
@@ -825,7 +842,7 @@ function decodeXml(value:string){
 }
 
 function dataflowsFromXml(xml:string){
-  const result:{id:string;name:string;agency:string}[]=[];
+  const result:{id:string;name:string;agency:string;version:string}[]=[];
   const regex=/<(?:\w+:)?Dataflow\b([^>]*)>([\s\S]*?)<\/(?:\w+:)?Dataflow>/gi;
   let match:RegExpExecArray|null;
 
@@ -834,10 +851,11 @@ function dataflowsFromXml(xml:string){
     const body=match[2];
     const id=(attrs.match(/\bid="([^"]+)"/i)||[])[1]||"";
     const agency=(attrs.match(/\bagencyID="([^"]+)"/i)||[])[1]||"";
+    const version=(attrs.match(/\bversion="([^"]+)"/i)||[])[1]||"latest";
     const names=[...body.matchAll(/<(?:\w+:)?Name\b[^>]*>([\s\S]*?)<\/(?:\w+:)?Name>/gi)]
       .map(x=>decodeXml(x[1].replace(/<[^>]+>/g,"").trim()));
     const name=names.find(Boolean)||id;
-    if(id) result.push({id,name,agency});
+    if(id) result.push({id,name,agency,version});
   }
 
   return result;
@@ -845,35 +863,37 @@ function dataflowsFromXml(xml:string){
 
 function dataflowsFromJson(payload:any){
   const rows=flattenObjects(payload);
-  const out:{id:string;name:string;agency:string}[]=[];
+  const out:{id:string;name:string;agency:string;version:string}[]=[];
 
   for(const row of rows){
     const id=objectCode(row);
     const name=objectName(row);
     const agency=text(row.agencyID)||text(row.agencyId)||text(row.agency);
+    const version=text(row.version)||"latest";
     const looksLikeFlow=Boolean(id&&name&&(agency||row.structure||row.version||row.isFinal!==undefined));
-    if(looksLikeFlow) out.push({id,name,agency});
+    if(looksLikeFlow) out.push({id,name,agency,version});
     if(out.length>=15000) break;
   }
 
   return out;
 }
 
+export type DatasetReference={providerId:string;agency:string;dataset:string;version:string;title:string;docs:string};
 type SdmxConfig={id:string;name:string;url:string;docs:string};
 
 const sdmxProviders:SdmxConfig[]=[
-  {id:"imf",name:"IMF",url:"https://api.imf.org/external/sdmx/3.0/structure/dataflow/all/all/+?detail=allstubs&references=none",docs:"https://data.imf.org/"},
-  {id:"ilo",name:"ILO",url:"https://sdmx.ilo.org/rest/dataflow/all/all/latest?detail=allstubs&references=none",docs:"https://sdmx.ilo.org/"},
+  {id:"imf",name:"IMF",url:"https://api.imf.org/external/sdmx/3.0/structure/dataflow/all/all/latest?detail=allstubs&references=none",docs:"https://data.imf.org/"},
+  {id:"ilo",name:"ILO",url:"https://sdmx.data.ilo.org/rest/dataflow/ILO/all/latest?detail=allstubs&references=none",docs:"https://sdmx.data.ilo.org/"},
   {id:"oecd",name:"OECD",url:"https://sdmx.oecd.org/public/rest/dataflow/all?detail=allstubs&references=none",docs:"https://data-explorer.oecd.org/"},
   {id:"unicef",name:"UNICEF",url:"https://sdmx.data.unicef.org/ws/public/sdmxapi/rest/dataflow/all/all/latest/?format=sdmx-json&detail=allstubs&references=none",docs:"https://sdmx.data.unicef.org/"},
   {id:"ecb",name:"ECB",url:"https://data-api.ecb.europa.eu/service/dataflow/all/all/latest?detail=allstubs&references=none",docs:"https://data.ecb.europa.eu/"},
   {id:"bis",name:"BIS",url:"https://stats.bis.org/api/v2/structure/dataflow/all/all/latest?detail=allstubs&references=none",docs:"https://stats.bis.org/"},
-  {id:"eurostat",name:"Eurostat",url:"https://ec.europa.eu/eurostat/api/dissemination/sdmx/3.0/structure/dataflow/ESTAT/*?detail=allstubs&references=none&compress=false",docs:"https://ec.europa.eu/eurostat/"}
+  {id:"eurostat",name:"Eurostat",url:"https://ec.europa.eu/eurostat/api/dissemination/sdmx/2.1/dataflow/all/all/latest?detail=allstubs&references=none",docs:"https://ec.europa.eu/eurostat/"}
 ];
 
 async function sdmxDataflows(config:SdmxConfig,q:string):Promise<SearchOutcome>{
   const res=await fetch(config.url,{
-    headers:{Accept:"application/vnd.sdmx.structure+json;version=2.0, application/json;q=0.9, application/xml;q=0.8, text/xml;q=0.8"},
+    headers:{"User-Agent":"PublicDataWorkbench/1.0 (+https://github.com/Oshione2002/Public-Data-Workbench)"},
     next:{revalidate:86400},
     signal:AbortSignal.timeout(18000)
   });
@@ -881,7 +901,7 @@ async function sdmxDataflows(config:SdmxConfig,q:string):Promise<SearchOutcome>{
 
   const raw=await res.text();
   const contentType=res.headers.get("content-type")||"";
-  let flows:{id:string;name:string;agency:string}[]=[];
+  let flows:{id:string;name:string;agency:string;version:string}[]=[];
 
   if(contentType.includes("json")||raw.trim().startsWith("{")||raw.trim().startsWith("[")){
     try{ flows=dataflowsFromJson(JSON.parse(raw)); }catch{ flows=[]; }
@@ -895,23 +915,27 @@ async function sdmxDataflows(config:SdmxConfig,q:string):Promise<SearchOutcome>{
     return matchesQuery(q,flow.id,flow.name,flow.agency);
   });
 
-  const items=matched.slice(0,MAX_PER_SOURCE).map(flow=>({
+  const items=matched.map(flow=>({
     id:config.id+"-dataset-"+flow.id,
     concept:"provider-dataset",
     title:flow.name,
     provider:config.name,
     providerId:config.id,
     indicator:flow.id,
+    dataset:flow.id,
+    datasetVersion:flow.version,
+    agency:flow.agency||"all",
     unit:"Dataset dimensions vary",
     frequency:"Dataset-defined",
     description:"Dataflow / dataset exposed through the "+config.name+" statistical API.",
     normalized:false,
     resultType:"dataset",
     selectable:false,
+    retrieval:"resolved",
     sourceUrl:config.docs
   } satisfies SeriesCatalogItem));
 
-  return {items,total:matched.length,partial:true};
+  return {items,total:matched.length};
 }
 
 async function eia(q:string):Promise<SearchOutcome>{
@@ -929,7 +953,7 @@ async function eia(q:string):Promise<SearchOutcome>{
     objectCode(row)&&objectName(row)&&matchesQuery(q,objectCode(row),objectName(row))
   );
 
-  const items=matched.slice(0,MAX_PER_SOURCE).map((row:any)=>{
+  const items=matched.map((row:any)=>{
     const code=objectCode(row);
     const title=objectName(row);
     return {
@@ -950,6 +974,40 @@ async function eia(q:string):Promise<SearchOutcome>{
   });
 
   return {items,total:matched.length,partial:true};
+}
+
+async function eurostatCatalogue(q:string):Promise<SearchOutcome>{
+  const response=await fetch("https://ec.europa.eu/eurostat/api/dissemination/catalogue/toc/txt?lang=en",{
+    next:{revalidate:86400},signal:AbortSignal.timeout(25000)
+  });
+  if(!response.ok) throw new Error("HTTP "+response.status);
+  const lines=(await response.text()).split(/\r?\n/).slice(1);
+  const rows=lines.flatMap(line=>{
+    const columns=line.split("\t").map(value=>value.replace(/^"|"$/g,"").trim());
+    const [title,code,type,,,start,end]=columns;
+    if(!code||!title||(type!=="dataset"&&type!=="table")||!matchesQuery(q,title,code,type,start||"",end||"")) return [];
+    const frequency=/quarter/i.test(title)||/-Q\d/.test(end||"")?"Quarterly":/month/i.test(title)||/^\d{4}-\d{2}$/.test(end||"")?"Monthly":"Annual / dataset-defined";
+    return [{title:title.trim(),code,type,frequency,start,end}];
+  });
+  const items=rows.map(row=>({
+    id:"eurostat-dataset-"+row.code,
+    concept:"eurostat-dataset",
+    title:row.title,
+    provider:"Eurostat",
+    providerId:"eurostat",
+    indicator:row.code,
+    dataset:row.code,
+    agency:"ESTAT",
+    unit:"Dataset dimensions vary",
+    frequency:row.frequency,
+    description:`Eurostat ${row.type}${row.start&&row.end?` · coverage ${row.start}–${row.end}`:""}.`,
+    normalized:false,
+    resultType:"dataset",
+    selectable:false,
+    retrieval:"resolved",
+    sourceUrl:"https://ec.europa.eu/eurostat/databrowser/view/"+encodeURIComponent(row.code)+"/default/table"
+  } satisfies SeriesCatalogItem));
+  return {items,total:items.length,...capFrequencyCounts(countsFromItems(items))};
 }
 
 type SearchFn=(q:string)=>Promise<SearchOutcome>;
@@ -974,9 +1032,23 @@ const dynamicSearchers:Record<string,SearchFn>={
 for(const config of sdmxProviders){
   dynamicSearchers[config.id]=(q:string)=>sdmxDataflows(config,q);
 }
-dynamicSearchers["ilo"]=ilo;
+dynamicSearchers.eurostat=eurostatCatalogue;
 
-export async function federatedCatalogSearch(q:string,providerIds:string[]):Promise<SearchResponse>{
+export type CatalogueQuery={
+  q:string;
+  providerIds:string[];
+  frequencies?:ProviderFrequency[];
+  page?:number;
+  pageSize?:number;
+};
+
+export async function federatedCatalogSearch({
+  q,
+  providerIds,
+  frequencies=[],
+  page=1,
+  pageSize=20
+}:CatalogueQuery):Promise<SearchResponse>{
   const requested=new Set(providerIds.filter(Boolean));
   const includeAll=requested.size===0;
   const results:SeriesCatalogItem[]=[];
@@ -1042,7 +1114,27 @@ export async function federatedCatalogSearch(q:string,providerIds:string[]):Prom
     });
   }
 
-  return {results:dedupe(results),status};
+  const ordered=sortAndDedupe(results)
+    .filter(item=>frequencies.length===0||frequencyIds(item.frequency).some(id=>frequencies.includes(id)));
+  const total=ordered.length;
+  const safePageSize=Math.max(1,Math.min(250,pageSize));
+  const totalPages=Math.max(1,Math.ceil(total/safePageSize));
+  const safePage=Math.max(1,Math.min(Math.trunc(page)||1,totalPages));
+  const start=(safePage-1)*safePageSize;
+  const filteredStatus=frequencies.length===0?status:status.map(entry=>{
+    if(entry.state!=="ok") return entry;
+    const count=ordered.filter(item=>item.providerId===entry.providerId).length;
+    return {...entry,...statusCount(count),partial:entry.partial};
+  });
+
+  return {
+    results:ordered.slice(start,start+safePageSize),
+    status:filteredStatus,
+    total,
+    page:safePage,
+    pageSize:safePageSize,
+    totalPages
+  };
 }
 
 export async function providerCatalogueCounts():Promise<ProviderSearchStatus[]>{

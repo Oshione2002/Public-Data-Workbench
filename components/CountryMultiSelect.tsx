@@ -28,6 +28,7 @@ export default function CountryMultiSelect({
   const [error,setError]=useState("");
   const rootRef=useRef<HTMLDivElement|null>(null);
   const searchRef=useRef<HTMLInputElement|null>(null);
+  const listRef=useRef<HTMLDivElement|null>(null);
 
   useEffect(()=>{
     const controller=new AbortController();
@@ -116,6 +117,12 @@ export default function CountryMultiSelect({
       aria-haspopup="listbox"
       aria-expanded={open}
       onClick={()=>setOpen(current=>!current)}
+      onKeyDown={event=>{
+        if(event.key==="ArrowDown"){
+          event.preventDefault();setOpen(true);
+          setTimeout(()=>searchRef.current?.focus(),0);
+        }
+      }}
     >
       <span className="countrySelectButtonText">{label}</span>
       <span className="countrySelectCount">{value.length||""}</span>
@@ -129,6 +136,12 @@ export default function CountryMultiSelect({
           className="input"
           value={query}
           onChange={event=>setQuery(event.target.value)}
+          onKeyDown={event=>{
+            if(event.key==="ArrowDown"){
+              event.preventDefault();
+              listRef.current?.querySelector<HTMLButtonElement>('[role="option"]')?.focus();
+            }
+          }}
           placeholder="Search country or code"
           aria-label="Search countries"
         />
@@ -152,7 +165,19 @@ export default function CountryMultiSelect({
         </div>
       </div>}
 
-      <div className="countryList" role="listbox" aria-multiselectable="true">
+      <div
+        className="countryList"
+        role="listbox"
+        aria-multiselectable="true"
+        ref={listRef}
+        onKeyDown={event=>{
+          if(event.key!=="ArrowDown"&&event.key!=="ArrowUp") return;
+          const options=[...(listRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]')||[])];
+          const index=options.indexOf(document.activeElement as HTMLButtonElement);
+          const next=event.key==="ArrowDown"?Math.min(options.length-1,index+1):Math.max(0,index-1);
+          if(options[next]){event.preventDefault();options[next].focus();}
+        }}
+      >
         {loading&&<div className="countryListState">Loading countries…</div>}
         {error&&<div className="countryListState errorText">{error}</div>}
         {!loading&&!error&&filtered.map(country=><button

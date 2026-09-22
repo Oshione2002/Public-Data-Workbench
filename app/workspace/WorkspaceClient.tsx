@@ -83,7 +83,11 @@ export default function WorkspaceClient(){
     setBusy(true);
     setMessage("");
 
-    const tasks=countries.flatMap(country=>cart.items.map(async item=>{
+    const tasks=cart.items.flatMap(item=>{
+      const itemCountries=item.geographyMode==="fixed"
+        ?[{code:item.geographyCode||item.providerId.toUpperCase(),iso2:"",name:`${item.provider} reference area`,region:"Provider-defined geography"}]
+        :countries;
+      return itemCountries.map(async country=>{
       try{
         const url=new URL("/api/data",location.origin);
         url.searchParams.set("provider",item.providerId);
@@ -91,6 +95,10 @@ export default function WorkspaceClient(){
         url.searchParams.set("country",country.code);
         url.searchParams.set("start",String(start));
         url.searchParams.set("end",String(end));
+        if(item.dataset) url.searchParams.set("dataset",item.dataset);
+        if(item.agency) url.searchParams.set("agency",item.agency);
+        if(item.datasetVersion) url.searchParams.set("datasetVersion",item.datasetVersion);
+        if(item.dimensions) url.searchParams.set("dimensions",JSON.stringify(item.dimensions));
 
         const response=await fetch(url);
         const data=await response.json();
@@ -121,7 +129,8 @@ export default function WorkspaceClient(){
           error:error instanceof Error?error.message:"Request failed"
         } as Loaded;
       }
-    }));
+      });
+    });
 
     const results=await Promise.all(tasks);
     setLoaded(results);
@@ -141,7 +150,9 @@ export default function WorkspaceClient(){
 
   const tableRows=useMemo(()=>{
     const rows:{country:CountryOption;period:string;year:number}[]=[];
-    for(const country of countries){
+    const rowCountries=new Map(countries.map(country=>[country.code,country]));
+    loaded.forEach(series=>rowCountries.set(series.country.code,series.country));
+    for(const country of rowCountries.values()){
       const periods=[...(periodsByCountry.get(country.code)||new Set<string>())]
         .sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
       for(const period of periods){
@@ -150,7 +161,7 @@ export default function WorkspaceClient(){
       }
     }
     return rows;
-  },[countries,periodsByCountry]);
+  },[countries,loaded,periodsByCountry]);
 
   const values=useMemo(()=>{
     const map=new Map<string,number>();
@@ -262,13 +273,17 @@ export default function WorkspaceClient(){
       title:series.item.title,
       provider:series.item.provider,
       providerId:series.item.providerId,
+      providerDataset:series.item.dataset||null,
       indicator:series.item.indicator,
       unit:series.item.unit,
       frequency:series.item.frequency,
+      definition:series.item.description,
+      dimensions:series.item.dimensions||{},
       coverage:series.coverage,
       sourceUrl:series.sourceUrl,
       retrievedAt:series.retrievedAt,
       derived:series.derived||false,
+      transformations:series.derived&&series.formula?[series.formula]:[],
       formula:series.formula||null
     }));
 

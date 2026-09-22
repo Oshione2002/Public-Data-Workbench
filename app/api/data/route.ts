@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getProvider } from "@/lib/providers";
+import { buildSdmxDataUrl, isSdmxProvider } from "@/lib/sdmx";
+import type { SeriesCatalogItem } from "@/lib/catalog";
 
 export const runtime="nodejs";
 
@@ -351,10 +353,43 @@ async function sdg(indicator:string,country:string,start:number,end:number){
   };
 }
 
+async function genericSdmx(item:SeriesCatalogItem,country:string,start:number,end:number){
+  const url=buildSdmxDataUrl(item,country,start,end);
+  const headers:Record<string,string>={"User-Agent":"PublicDataWorkbench/1.0"};
+  if(item.providerId==="oecd") url.searchParams.set("format","csvfile");
+  else if(item.providerId==="unicef"||item.providerId==="ilo") url.searchParams.set("format","csv");
+  else if(item.providerId==="ecb") url.searchParams.set("format","csvdata");
+  else if(item.providerId==="eurostat") url.searchParams.set("format","SDMX-CSV");
+  else if(item.providerId==="bis") headers.Accept="application/vnd.sdmx.data+csv;version=2.0.0";
+  else headers.Accept="text/csv";
+
+  const response=await fetch(url,{headers,next:{revalidate:900},signal:AbortSignal.timeout(25000)});
+  if(!response.ok){
+    const body=(await response.text()).replace(/\s+/g," ").slice(0,220);
+    if(response.status===404&&/no\s*results|noresultsfound/i.test(body)){
+      return {points:[] as Point[],sourceUrl:url.toString(),meta:{dataset:item.dataset,dimensions:item.dimensions,transport:"SDMX"}};
+    }
+    throw new Error(`${item.provider} returned HTTP ${response.status}${body?" — "+body:""}`);
+  }
+  const table=parseCsv(await response.text()).filter(row=>row.some(cell=>cell.trim()!==""));
+  if(table.length<2) return {points:[] as Point[],sourceUrl:url.toString(),meta:{dataset:item.dataset,dimensions:item.dimensions}};
+  const header=table[0].map(cell=>cell.replace(/^\uFEFF/,"").trim());
+  const rows=table.slice(1).map(columns=>Object.fromEntries(header.map((key,index)=>[key,columns[index]??""])));
+  const points=pointsFromRows(rows).filter(point=>point.year>=start&&point.year<=end);
+  return {
+    points:ensureUniquePeriods(points,item.provider),
+    sourceUrl:url.toString(),
+    meta:{dataset:item.dataset,agency:item.agency,dimensions:item.dimensions,transport:"SDMX"}
+  };
+}
+
 export async function GET(request:NextRequest){
   const sp=request.nextUrl.searchParams;
   const provider=sp.get("provider")||"";
   const indicator=sp.get("indicator")||"";
+  const dataset=sp.get("dataset")||"";
+  const agency=sp.get("agency")||"all";
+  const datasetVersion=sp.get("datasetVersion")||"latest";
   const country=(sp.get("country")||"NGA").toUpperCase();
   const start=Math.max(1800,Math.min(2200,Number(sp.get("start")||1990)));
   const end=Math.max(start,Math.min(2200,Number(sp.get("end")||new Date().getUTCFullYear())));
@@ -370,7 +405,28 @@ export async function GET(request:NextRequest){
     else if(provider==="wto") result=await wto(indicator,country,start,end);
     else if(provider==="unhcr") result=await unhcr(indicator,country,start,end);
     else if(provider==="sdg") result=await sdg(indicator,country,start,end);
-    else return NextResponse.json({
+    else if(isSdmxProvider(provider)&&dataset){
+      let dimensions:Record<string,string>={};
+      try{ dimensions=JSON.parse(sp.get("dimensions")||"{}"); }catch{}
+      result=await genericSdmx({
+        id:`${provider}-${dataset}-${indicator}`,
+        concept:"resolved-series",
+        title:indicator,
+        provider:getProvider(provider)?.shortName||provider,
+        providerId:provider,
+        indicator,
+        unit:"See provider metadata",
+        frequency:"Provider-defined",
+        description:"Resolved SDMX series.",
+        normalized:true,
+        resultType:"series",
+        selectable:true,
+        dataset,
+        datasetVersion,
+        agency,
+        dimensions
+      },country,start,end);
+    }else return NextResponse.json({
       error:"This provider result still needs dimension resolution before it can be loaded into the common workspace.",
       provider
     },{status:400});

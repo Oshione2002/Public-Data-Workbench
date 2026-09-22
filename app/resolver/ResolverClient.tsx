@@ -46,9 +46,16 @@ export default function ResolverClient(){
     if(valid.length<2) return null;
     const a=valid[0],b=valid[1];
     const bm=new Map(b.observations.map(x=>[x.year,x.value]));
-    const diffs=a.observations.filter(x=>bm.has(x.year)).map(x=>Math.abs(x.value-(bm.get(x.year) as number)));
+    const pairs=a.observations.filter(x=>bm.has(x.year)).map(x=>[x.value,bm.get(x.year) as number] as const);
+    const diffs=pairs.map(([left,right])=>Math.abs(left-right));
     if(!diffs.length) return null;
-    return {a:a.item.title,b:b.item.title,count:diffs.length,mean:diffs.reduce((s,x)=>s+x,0)/diffs.length,max:Math.max(...diffs)};
+    const leftMean=pairs.reduce((sum,[left])=>sum+left,0)/pairs.length;
+    const rightMean=pairs.reduce((sum,[,right])=>sum+right,0)/pairs.length;
+    const numerator=pairs.reduce((sum,[left,right])=>sum+(left-leftMean)*(right-rightMean),0);
+    const leftVariance=pairs.reduce((sum,[left])=>sum+(left-leftMean)**2,0);
+    const rightVariance=pairs.reduce((sum,[,right])=>sum+(right-rightMean)**2,0);
+    const correlation=pairs.length>1&&leftVariance>0&&rightVariance>0?numerator/Math.sqrt(leftVariance*rightVariance):null;
+    return {a:a.item.title,b:b.item.title,count:diffs.length,mean:diffs.reduce((s,x)=>s+x,0)/diffs.length,max:Math.max(...diffs),correlation};
   },[results]);
 
   function coverageStyle(r:Result){
@@ -95,6 +102,7 @@ export default function ResolverClient(){
           <div className="ruleRow"><span>Common observations</span><strong>{pairStats.count}</strong></div>
           <div className="ruleRow"><span>Mean absolute difference</span><strong>{pairStats.mean.toFixed(3)}</strong></div>
           <div className="ruleRow"><span>Maximum absolute difference</span><strong>{pairStats.max.toFixed(3)}</strong></div>
+          <div className="ruleRow"><span>Pearson correlation</span><strong>{pairStats.correlation===null?"Not applicable":pairStats.correlation.toFixed(4)}</strong></div>
           <p className="sectionCopy" style={{fontSize:13,marginTop:12}}>Numerical similarity alone does not prove methodological equivalence. Review definitions and source metadata before constructing a composite.</p>
         </>:<p className="sectionCopy">Two overlapping live series are needed before numerical differences can be calculated.</p>}
       </section>

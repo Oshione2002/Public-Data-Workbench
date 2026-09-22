@@ -32,8 +32,6 @@ type FrequencySummary={
   capped:Partial<Record<FrequencyId,boolean>>;
 };
 
-const MAX_PREVIEW_COUNT=20;
-
 const frequencyOptions:{id:FrequencyId;label:string}[]=[
   {id:"annual",label:"Annual"},
   {id:"semiannual",label:"Semiannual"},
@@ -76,6 +74,12 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
   const [filtersOpen,setFiltersOpen]=useState(false);
   const [cartOpen,setCartOpen]=useState(false);
   const [inspected,setInspected]=useState<SeriesCatalogItem|null>(null);
+  const [page,setPage]=useState(1);
+  const [pageSize,setPageSize]=useState<"20"|"50"|"100"|"250"|"all">("20");
+  const [total,setTotal]=useState(0);
+  const [totalPages,setTotalPages]=useState(1);
+  const [hasMore,setHasMore]=useState(false);
+  const [partialTotal,setPartialTotal]=useState(false);
   const cart=useCart();
 
   useEffect(()=>{ if(location.hash==="#cart") setCartOpen(true); },[]);
@@ -84,6 +88,11 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
     const timer=setTimeout(()=>setSearchQuery(query),650);
     return ()=>clearTimeout(timer);
   },[query]);
+
+  useEffect(()=>{
+    setPage(1);
+    setResults([]);
+  },[searchQuery,providerFilters,frequencyFilters,pageSize]);
 
   useEffect(()=>{
     const controller=new AbortController();
@@ -114,11 +123,23 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
     const params=new URLSearchParams();
     if(searchQuery.trim()) params.set("q",searchQuery.trim());
     if(providerFilters.length) params.set("providers",providerFilters.join(","));
+    if(frequencyFilters.length) params.set("frequencies",frequencyFilters.join(","));
+    params.set("page",String(page));
+    params.set("pageSize",pageSize);
 
     fetch("/api/catalog?"+params.toString(),{signal:controller.signal})
       .then(r=>r.json())
       .then(data=>{
-        setResults(Array.isArray(data.results)?data.results:[]);
+        const incoming:SeriesCatalogItem[]=Array.isArray(data.results)?data.results:[];
+        setResults(previous=>{
+          if(pageSize!=="all"||page===1) return incoming;
+          const known=new Set(previous.map(item=>item.id));
+          return [...previous,...incoming.filter(item=>!known.has(item.id))];
+        });
+        setTotal(Number(data.total)||0);
+        setTotalPages(Math.max(1,Number(data.totalPages)||1));
+        setHasMore(Boolean(data.hasMore));
+        setPartialTotal(Boolean(data.partial));
         setSourceStatus(Array.isArray(data.sourceStatus)?data.sourceStatus:[]);
         setSearchFrequencySummary({
           counts:data?.frequencies?.counts||{},
@@ -129,7 +150,7 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
       .finally(()=>setLoading(false));
 
     return ()=>controller.abort();
-  },[searchQuery,providerFilters]);
+  },[searchQuery,providerFilters,frequencyFilters,page,pageSize]);
 
   const providerMap=useMemo(()=>{
     const map=new Map<string,ProviderInfo>();
@@ -143,10 +164,7 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
     return providerMap.get(item.providerId)?.frequencies?.includes(frequency)??false;
   }
 
-  const visible=useMemo(()=>{
-    if(frequencyFilters.length===0) return results;
-    return results.filter(item=>frequencyFilters.some(frequency=>itemMatchesFrequency(item,frequency)));
-  },[results,frequencyFilters,providerMap]);
+  const visible=results;
 
   const resultCounts=useMemo(()=>{
     const counts=new Map<string,number>();
@@ -207,6 +225,11 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
     setFrequencyFilters(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
   }
 
+  const paginationPages=useMemo(()=>{
+    const pages=new Set([1,totalPages,page-2,page-1,page,page+1,page+2]);
+    return [...pages].filter(value=>value>=1&&value<=totalPages).sort((a,b)=>a-b);
+  },[page,totalPages]);
+
   function providerStatus(p:ProviderInfo){
     if(p.mode==="keyed") return p.configured?"API key configured":"API key required";
     if(p.queryable) return "API registered";
@@ -227,7 +250,7 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
       }
 
       const visibleCount=resultCounts.get(provider.id)||0;
-      return status?.capped&&visibleCount>=MAX_PREVIEW_COUNT?visibleCount+"+":String(visibleCount);
+      return status?.capped||status?.partial?((status?.count??visibleCount)+"+"):String(status?.count??visibleCount);
     }
 
     const status=catalogueStatusMap.get(provider.id);
@@ -334,8 +357,8 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
             {loading
               ?"Searching catalogue…"
               :providerFilters.length
-                ?visible.length+" matching result"+(visible.length===1?"":"s")+" from "+providerFilters.length+" selected source"+(providerFilters.length===1?"":"s")
-                :visible.length+" matching result"+(visible.length===1?"":"s")+" · "+allProviders.length+" data sources registered"}
+                ?total+(partialTotal?"+":"")+" matching result"+(total===1?"":"s")+" from "+providerFilters.length+" selected source"+(providerFilters.length===1?"":"s")
+                :total+(partialTotal?"+":"")+" matching result"+(total===1?"":"s")+" · "+allProviders.length+" data sources registered"}
           </div>
         </div>
 
@@ -370,7 +393,14 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
         </section>
       }
 
-      {loading
+      <div className="paginationBar topPagination">
+        <label>Rows <select className="input pageSizeSelect" value={pageSize} onChange={event=>setPageSize(event.target.value as typeof pageSize)}>
+          <option value="20">20</option><option value="50">50</option><option value="100">100</option><option value="250">250</option><option value="all">All</option>
+        </select></label>
+        {pageSize!=="all"&&<span>Page {page} of {totalPages}</span>}
+      </div>
+
+      {loading&&!(pageSize==="all"&&page>1)
         ? <p className="loading">Loading catalogue…</p>
         : <div className="resultList">
             {visible.map(item=>
@@ -393,7 +423,9 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
 
                 <div className="resultActions">
                   <button className="button compact" type="button" onClick={()=>setInspected(item)}>Details</button>
-                  {item.selectable===false
+                  {item.resultType==="dataset"
+                    ? <a className="button compact" href={`/datasets/${encodeURIComponent(item.providerId)}/${encodeURIComponent(item.dataset||item.indicator)}?agency=${encodeURIComponent(item.agency||"all")}&version=${encodeURIComponent(item.datasetVersion||"latest")}`}>Open dataset</a>
+                    :item.selectable===false
                     ? <a className="button compact" href={"/sources#"+item.providerId}>Source</a>
                     : <button
                         className={"button compact "+(cart.has(item.id)?"danger":"")}
@@ -417,6 +449,14 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
             }
           </div>
       }
+
+      {pageSize==="all"
+        ?<div className="paginationBar paginationBottom"><span>{visible.length} of {total} loaded</span>{hasMore&&<button className="button" disabled={loading} onClick={()=>setPage(value=>value+1)}>{loading?"Loading…":"Load next 250"}</button>}</div>
+        :totalPages>1&&<nav className="paginationBar paginationBottom" aria-label="Catalogue pages">
+          <button className="button compact" disabled={page<=1||loading} onClick={()=>setPage(value=>value-1)}>Previous</button>
+          <div className="pageNumbers">{paginationPages.map((value,index)=><span key={value}>{index>0&&value-paginationPages[index-1]>1&&<i>…</i>}<button className={value===page?"active":""} disabled={loading} onClick={()=>setPage(value)}>{value}</button></span>)}</div>
+          <button className="button compact" disabled={page>=totalPages||loading} onClick={()=>setPage(value=>value+1)}>Next</button>
+        </nav>}
     </main>
 
     <button className="button primary" style={{position:"fixed",right:18,bottom:18,zIndex:60}} type="button" onClick={()=>setCartOpen(v=>!v)}>{cart.items.length} selected</button>
@@ -444,7 +484,9 @@ export default function DiscoverClient({initialQuery}:{initialQuery:string}){
           <div className="metaRow"><dt>Type</dt><dd>{inspected.resultType==="dataset"?"Dataset / dataflow":"Statistical series"}</dd></div>
           <div className="metaRow"><dt>Retrieval</dt><dd>{inspected.normalized?"Available directly in the workbench":"Searchable provider metadata; workspace normalization is still required for this result."}</dd></div>
         </dl>
-        {inspected.selectable===false
+        {inspected.resultType==="dataset"
+          ? <a className="button primary" href={`/datasets/${encodeURIComponent(inspected.providerId)}/${encodeURIComponent(inspected.dataset||inspected.indicator)}?agency=${encodeURIComponent(inspected.agency||"all")}&version=${encodeURIComponent(inspected.datasetVersion||"latest")}`}>Open dataset</a>
+          :inspected.selectable===false
           ? <a className="button primary" href={"/sources#"+inspected.providerId}>Open source details</a>
           : <button className={"button primary "+(cart.has(inspected.id)?"danger":"")} type="button" onClick={()=>cart.toggle(inspected)}>{cart.has(inspected.id)?"Remove series":"Add series"}</button>}
       </aside>}
